@@ -13,14 +13,14 @@ impl KeyExchange for EcdhP256 {
         let rng = ring::rand::SystemRandom::new();
         let private_key = match EphemeralPrivateKey::generate(&ECDH_P256, &rng) {
             Ok(v) => v,
-            Err(_) => return Err(SshError::from("encryption error.")),
+            Err(e) => return Err(SshError::KexError(e.to_string())),
         };
         match private_key.compute_public_key() {
             Ok(public_key) => Ok(EcdhP256 {
                 private_key,
                 public_key,
             }),
-            Err(_) => Err(SshError::from("encryption error.")),
+            Err(e) => Err(SshError::KexError(e.to_string())),
         }
     }
 

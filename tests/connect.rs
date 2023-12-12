@@ -1,6 +1,6 @@
 mod tests {
     use paste::paste;
-    use ssh_rs::ssh;
+
     use std::env;
 
     macro_rules! env_getter {
@@ -45,7 +45,7 @@ mod tests {
     fn test_rsa_old() {
         let session = ssh::create_session()
             .username(&get_username())
-            .private_key_path(&get_pem_rsa())
+            .private_key_path(get_pem_rsa())
             .connect(get_server())
             .unwrap()
             .run_local();
@@ -56,7 +56,7 @@ mod tests {
     fn test_rsa_new() {
         let session = ssh::create_session()
             .username(&get_username())
-            .private_key_path(&get_openssh_rsa())
+            .private_key_path(get_openssh_rsa())
             .connect(get_server())
             .unwrap()
             .run_local();
@@ -67,7 +67,7 @@ mod tests {
     fn test_ed25519() {
         let session = ssh::create_session()
             .username(&get_username())
-            .private_key_path(&get_ed25519())
+            .private_key_path(get_ed25519())
             .connect(get_server())
             .unwrap()
             .run_local();

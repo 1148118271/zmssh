@@ -3,36 +3,65 @@ use crate::algorithm::hash;
 use crate::algorithm::hash::HashType;
 use crate::constant;
 
-/// 加密密钥必须是对一个已知值和 K 的 HASH 结果，方法如下：
-/// ○ 客户端到服务器的初始 IV：HASH(K || H || "A" || session_id)（这里 K 为 mpint
-/// 格式，"A"为 byte 格式，session_id 为原始数据（raw data）。"A"是单个字母 A，
-/// ASCII 65）。
-/// ○ 服务器到客户端的初始 IV：HASH(K || H || "B" || session_id)
-/// ○ 客户端到服务器的加密密钥：HASH(K || H || "C" || session_id)
-/// ○ 服务器到客户端的加密密钥：HASH(K || H || "D" || session_id)
-/// ○ 客户端到服务器的完整性密钥：HASH(K || H || "E" || session_id)
-/// ○ 服务器到客户端的完整性密钥：HASH(K || H || "F" || session_id)
-/// 密钥数据必须从哈希输出的开头开始取。即从哈希值的开头开始，取所需数量的字节。如果需要
-/// 的密钥长度超过 HASH 输出，则拼接 K、H 和当前的整个密钥并计算其 HASH，然后将 HASH 产
-/// 生的字节附加到密钥尾部。重复该过程，直到获得了足够的密钥材料；密钥从该值的开头开始取
-/// 换句话说：
-/// K1 = HASH(K || H || X || session_id)（X 表示"A"等）
-/// K2 = HASH(K || H || K1)
-/// K3 = HASH(K || H || K1 || K2)
-/// ...
-/// key = K1 || K2 || K3 || ...
-/// 如果 K 的熵比 HASH 的内状态（internal state）大小要大，则该过程将造成熵的丢失。
+/// <https://www.rfc-editor.org/rfc/rfc4253#section-7.2>
+///
+/// The key exchange produces two values: a shared secret K, and an
+/// exchange hash H.  Encryption and authentication keys are derived from
+/// these.  The exchange hash H from the first key exchange is
+/// additionally used as the session identifier, which is a unique
+/// identifier for this connection.  It is used by authentication methods
+/// as a part of the data that is signed as a proof of possession of a
+/// private key.  Once computed, the session identifier is not changed,
+/// even if keys are later re-exchanged.
 
+/// Each key exchange method specifies a hash function that is used in
+/// the key exchange.  The same hash algorithm MUST be used in key
+/// derivation.  Here, we'll call it HASH.
+
+/// Encryption keys MUST be computed as HASH, of a known value and K, as
+/// follows:
+
+/// o  Initial IV client to server: HASH(K || H || "A" || session_id)
+///    (Here K is encoded as mpint and "A" as byte and session_id as raw
+///    data.  "A" means the single character A, ASCII 65).
+
+/// o  Initial IV server to client: HASH(K || H || "B" || session_id)
+
+/// o  Encryption key client to server: HASH(K || H || "C" || session_id)
+
+/// o  Encryption key server to client: HASH(K || H || "D" || session_id)
+
+/// o  Integrity key client to server: HASH(K || H || "E" || session_id)
+
+/// o  Integrity key server to client: HASH(K || H || "F" || session_id)
+
+/// Key data MUST be taken from the beginning of the hash output.  As
+/// many bytes as needed are taken from the beginning of the hash value.
+/// If the key length needed is longer than the output of the HASH, the
+/// key is extended by computing HASH of the concatenation of K and H and
+/// the entire key so far, and appending the resulting bytes (as many as
+/// HASH generates) to the key.  This process is repeated until enough
+/// key material is available; the key is taken from the beginning of
+/// this value.  In other words:
+
+///    K1 = HASH(K || H || X || session_id)   (X is e.g., "A")
+///    K2 = HASH(K || H || K1)
+///    K3 = HASH(K || H || K1 || K2)
+///    ...
+///    key = K1 || K2 || K3 || ...
+
+/// This process will lose entropy if the amount of entropy in K is
+/// larger than the internal state size of HASH.
 pub struct Hash {
-    /// 数据加密时只使用一次的随机数  number used once
+    /// reandom number used once
     pub iv_c_s: Vec<u8>,
     pub iv_s_c: Vec<u8>,
 
-    /// 数据加密的 key
+    /// key used for data exchange
     pub ek_c_s: Vec<u8>,
     pub ek_s_c: Vec<u8>,
 
-    /// Hmac时候用到的 key
+    /// key used for hmac
     pub ik_c_s: Vec<u8>,
     pub ik_s_c: Vec<u8>,
 

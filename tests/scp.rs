@@ -1,7 +1,7 @@
+#[cfg(feature = "scp")]
 mod test {
     use paste::paste;
-    use ssh_rs::ssh;
-    use ssh_rs::LocalSession;
+    use ssh::{self, LocalSession};
     use std::env;
 
     fn remove_file(filename: &str) {

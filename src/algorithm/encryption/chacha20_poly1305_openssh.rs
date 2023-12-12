@@ -4,7 +4,10 @@ use crate::error::SshError;
 use crate::{algorithm::encryption::Encryption, error::SshResult};
 use ring::aead::chacha20_poly1305_openssh::{OpeningKey, SealingKey};
 
-const BSIZE: usize = 64;
+const KEY_SIZE: usize = 64;
+const IV_SIZE: usize = 0;
+const BLOCK_SIZE: usize = 0;
+const MAC_SIZE: usize = 16;
 
 pub(super) struct ChaCha20Poly1305 {
     client_key: SealingKey,
@@ -13,21 +16,17 @@ pub(super) struct ChaCha20Poly1305 {
 
 impl Encryption for ChaCha20Poly1305 {
     fn bsize(&self) -> usize {
-        0
+        BLOCK_SIZE
     }
 
     fn iv_size(&self) -> usize {
-        0
-    }
-
-    fn group_size(&self) -> usize {
-        64
+        IV_SIZE
     }
 
     fn new(hash: Hash, _mac: Box<dyn Mac>) -> ChaCha20Poly1305 {
-        let (ck, sk) = hash.mix_ek(BSIZE);
-        let mut sealing_key = [0_u8; BSIZE];
-        let mut opening_key = [0_u8; BSIZE];
+        let (ck, sk) = hash.mix_ek(KEY_SIZE);
+        let mut sealing_key = [0_u8; KEY_SIZE];
+        let mut opening_key = [0_u8; KEY_SIZE];
         sealing_key.copy_from_slice(&ck);
         opening_key.copy_from_slice(&sk);
 
@@ -38,7 +37,7 @@ impl Encryption for ChaCha20Poly1305 {
     }
 
     fn encrypt(&mut self, sequence_number: u32, buf: &mut Vec<u8>) {
-        let mut tag = [0_u8; 16];
+        let mut tag = [0_u8; MAC_SIZE];
         self.client_key
             .seal_in_place(sequence_number, buf, &mut tag);
         buf.append(&mut tag.to_vec());
@@ -53,11 +52,13 @@ impl Encryption for ChaCha20Poly1305 {
             .decrypt_packet_length(sequence_number, packet_len_slice);
         let packet_len = u32::from_be_bytes(packet_len_slice);
         let (buf, tag_) = buf.split_at_mut((packet_len + 4) as usize);
-        let mut tag = [0_u8; 16];
+        let mut tag = [0_u8; MAC_SIZE];
         tag.copy_from_slice(tag_);
         match self.server_key.open_in_place(sequence_number, buf, &tag) {
             Ok(result) => Ok([&packet_len_slice[..], result].concat()),
-            Err(_) => Err(SshError::from("encryption error.")),
+            Err(_) => Err(SshError::EncryptionError(
+                "Failed to decrypt the server traffic".to_owned(),
+            )),
         }
     }
 
@@ -67,15 +68,15 @@ impl Encryption for ChaCha20Poly1305 {
         let packet_len_slice = self
             .server_key
             .decrypt_packet_length(sequence_number, packet_len_slice);
-        u32::from_be_bytes(packet_len_slice) as usize
+        u32::from_be_bytes(packet_len_slice) as usize + 4
     }
 
     fn data_len(&mut self, sequence_number: u32, buf: &[u8]) -> usize {
         let packet_len = self.packet_len(sequence_number, buf);
-        packet_len + 4 + 16
+        packet_len + MAC_SIZE
     }
 
-    fn is_cp(&self) -> bool {
+    fn no_pad(&self) -> bool {
         true
     }
 }

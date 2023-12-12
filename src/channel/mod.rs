@@ -2,10 +2,13 @@ mod backend;
 mod local;
 
 pub(crate) use backend::Channel as BackendChannel;
-pub use backend::{ChannelBroker, ExecBroker, ScpBroker, ShellBrocker};
+pub use backend::{ChannelBroker, ExecBroker, ShellBrocker};
 
 pub(crate) use local::Channel as LocalChannel;
 pub use local::ChannelExec as LocalExec;
-pub use local::ChannelScp as LocalScp;
-pub use local::ChannelSftp as LocalSftp;
 pub use local::ChannelShell as LocalShell;
+
+#[cfg(feature = "scp")]
+pub use backend::ScpBroker;
+#[cfg(feature = "scp")]
+pub use local::ChannelScp as LocalScp;

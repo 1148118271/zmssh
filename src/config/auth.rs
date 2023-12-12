@@ -5,7 +5,8 @@ use crate::algorithm::{
 use crate::model::Data;
 use crate::{SshError, SshResult};
 use rsa::pkcs1::DecodeRsaPrivateKey;
-use rsa::PublicKeyParts;
+use rsa::pkcs1v15::Pkcs1v15Sign;
+use rsa::traits::PublicKeyParts;
 use std::fmt::Debug;
 use std::fs::File;
 use std::io::Read;
@@ -32,16 +33,18 @@ impl KeyPair {
                     ssh_key::Algorithm::Rsa { hash: _hash } => (KeyType::SshRsa, key_str),
                     ssh_key::Algorithm::Ed25519 => (KeyType::SshEd25519, key_str),
                     x => {
-                        return Err(SshError::from(format!(
+                        return Err(SshError::SshPubKeyError(format!(
                             "Currently don't support the key file type {}",
                             x
                         )))
                     }
                 },
-                Err(e) => return Err(SshError::from(e.to_string())),
+                Err(e) => return Err(SshError::SshPubKeyError(e.to_string())),
             }
         } else {
-            return Err(SshError::from("Unable to detect the pulic key type"));
+            return Err(SshError::SshPubKeyError(
+                "Unable to detect the pulic key type".to_owned(),
+            ));
         };
 
         // then store it
@@ -93,16 +96,16 @@ impl KeyPair {
             KeyType::PemRsa | KeyType::SshRsa => {
                 let (scheme, digest) = match alg {
                     PubKey::RsaSha2_512 => (
-                        rsa::PaddingScheme::new_pkcs1v15_sign::<sha2::Sha512>(),
+                        Pkcs1v15Sign::new::<sha2::Sha512>(),
                         ring::digest::digest(&ring::digest::SHA512, sd),
                     ),
                     PubKey::RsaSha2_256 => (
-                        rsa::PaddingScheme::new_pkcs1v15_sign::<sha2::Sha256>(),
+                        Pkcs1v15Sign::new::<sha2::Sha256>(),
                         ring::digest::digest(&ring::digest::SHA256, sd),
                     ),
-                    #[cfg(feature = "dangerous-rsa-sha1")]
+                    #[cfg(feature = "deprecated-rsa-sha1")]
                     PubKey::SshRsa => (
-                        rsa::PaddingScheme::new_pkcs1v15_sign::<sha1::Sha1>(),
+                        Pkcs1v15Sign::new::<sha1::Sha1>(),
                         ring::digest::digest(&ring::digest::SHA1_FOR_LEGACY_USE_ONLY, sd),
                     ),
                     _ => unreachable!(),
@@ -153,17 +156,12 @@ impl KeyPair {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub(super) enum KeyType {
+    #[default]
     PemRsa,
     SshRsa,
     SshEd25519,
-}
-
-impl Default for KeyType {
-    fn default() -> Self {
-        KeyType::PemRsa
-    }
 }
 
 #[derive(Clone, Default)]
@@ -209,10 +207,7 @@ impl AuthInfo {
     where
         P: AsRef<Path>,
     {
-        let mut file = match File::open(p) {
-            Ok(file) => file,
-            Err(e) => return Err(SshError::from(e.to_string())),
-        };
+        let mut file = File::open(p)?;
         let mut prks = String::new();
         file.read_to_string(&mut prks)?;
 

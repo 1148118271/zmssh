@@ -1,7 +1,8 @@
 use crate::algorithm::public_key::PublicKey as PubK;
 use crate::model::Data;
 use crate::SshError;
-use rsa::PublicKey;
+//use rsa::PublicKey;
+use rsa::pkcs1v15::Pkcs1v15Sign;
 
 pub(super) struct RsaSha256;
 
@@ -20,7 +21,7 @@ impl PubK for RsaSha256 {
         let e = rsa::BigUint::from_bytes_be(data.get_u8s().as_slice());
         let n = rsa::BigUint::from_bytes_be(data.get_u8s().as_slice());
         let public_key = rsa::RsaPublicKey::new(n, e).unwrap();
-        let scheme = rsa::PaddingScheme::new_pkcs1v15_sign::<sha2::Sha256>();
+        let scheme = Pkcs1v15Sign::new::<sha2::Sha256>();
 
         let digest = ring::digest::digest(&ring::digest::SHA256, message);
         let msg = digest.as_ref();
@@ -46,7 +47,7 @@ impl PubK for RsaSha512 {
         let e = rsa::BigUint::from_bytes_be(data.get_u8s().as_slice());
         let n = rsa::BigUint::from_bytes_be(data.get_u8s().as_slice());
         let public_key = rsa::RsaPublicKey::new(n, e).unwrap();
-        let scheme = rsa::PaddingScheme::new_pkcs1v15_sign::<sha2::Sha512>();
+        let scheme = Pkcs1v15Sign::new::<sha2::Sha512>();
 
         let digest = ring::digest::digest(&ring::digest::SHA512, message);
         let msg = digest.as_ref();
@@ -55,9 +56,9 @@ impl PubK for RsaSha512 {
     }
 }
 
-#[cfg(feature = "dangerous-rsa-sha1")]
+#[cfg(feature = "deprecated-rsa-sha1")]
 pub(super) struct RsaSha1;
-#[cfg(feature = "dangerous-rsa-sha1")]
+#[cfg(feature = "deprecated-rsa-sha1")]
 impl PubK for RsaSha1 {
     fn new() -> Self
     where
@@ -73,7 +74,7 @@ impl PubK for RsaSha1 {
         let e = rsa::BigUint::from_bytes_be(data.get_u8s().as_slice());
         let n = rsa::BigUint::from_bytes_be(data.get_u8s().as_slice());
         let public_key = rsa::RsaPublicKey::new(n, e).unwrap();
-        let scheme = rsa::PaddingScheme::new_pkcs1v15_sign::<sha1::Sha1>();
+        let scheme = Pkcs1v15Sign::new::<sha1::Sha1>();
 
         let digest = ring::digest::digest(&ring::digest::SHA1_FOR_LEGACY_USE_ONLY, message);
         let msg = digest.as_ref();

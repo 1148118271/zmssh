@@ -1,6 +1,6 @@
 [package]
 name = "ssh-rs"
-version = "0.3.2"
+version = "0.4.5"
 edition = "2021"
 authors = [
     "Gao Xiang Kang <1148118271@qq.com>",
@@ -14,41 +14,65 @@ repository = "https://github.com/1148118271/ssh-rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [features]
-dangerous-algorithms = ["dangerous-rsa-sha1", "dangerous-dh-group1-sha1"]
-dangerous-rsa-sha1 = ["sha1"]
-dangerous-dh-group1-sha1 = []
+deprecated-algorithms = [
+    "deprecated-rsa-sha1",
+    "deprecated-dh-group1-sha1",
+    "deprecated-aes-cbc",
+    "deprecated-des-cbc",
+    "deprecated-dss-sha1"
+    ]
+deprecated-rsa-sha1 = ["dep:sha1"]
+deprecated-dss-sha1 = ["dep:sha1", "dep:dsa"]
+deprecated-dh-group1-sha1 = ["dep:sha1"]
+deprecated-aes-cbc = ["dep:cbc", "dep:cipher"]
+deprecated-des-cbc = ["dep:cbc", "dep:cipher", "dep:des"]
+deprecated-zlib = []
+scp = ["dep:filetime"]
+
+[lib]
+name = "ssh"
+path = "src/lib.rs"
 
 [dependencies]
-log = "0.4"
+## error
+thiserror = "^1.0"
+
+## log
+tracing = { version = "0.1.36", features = ["log"] }
+
+## string enum
+strum = "0.25"
+strum_macros = "0.25"
+
+## algorithm
 rand = "0.8"
 num-bigint = { version = "0.4", features = ["rand"] }
-strum = "0.24"
-strum_macros = "0.24"
 # the crate rsa has removed the internal hash implement from 0.7.0
 sha1  = { version = "0.10.5", default-features = false, features = ["oid"], optional = true }
 sha2  = { version = "0.10.6", default-features = false, features = ["oid"]}
-rsa = "^0.7"
-aes = { version = "0.7", features = ["ctr"] }
-ssh-key = { version = "0.5.1", features = ["rsa", "ed25519"]}
-signature = "1.6.4"
-ring = "0.16.20"
-filetime = "0.2"
+dsa = { version = "0.6.1", optional = true }
+rsa = "0.9"
+aes = "0.8"
+ctr = "0.9"
+des = { version = "0.8", optional = true }
+cbc = { version = "0.1", optional = true }
+cipher = { version = "0.4", optional = true }
+ssh-key = { version = "0.6", features = ["rsa", "ed25519", "alloc"]}
+signature = "2.1"
+ring = "0.17"
 
-# async
-# [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# tokio = { version = "^1", features = ["full"] }
+## compression
+flate2 = "^1.0"
+
+## utils
+filetime = { version = "0.2", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-getrandom = { version = "0.2", features = ["js"] }
-# tokio = { version = "^1", features = [
-#     "sync",
-#     "macros",
-#     "io-util",
-#     "rt",
-#     "time"
-#     ]}
+ring = { version = "0.17", features = ["wasm32_unknown_unknown_js"] }
+
 
 [dev-dependencies]
+tracing-subscriber = { version = "^0.3" }
 paste = "1"
 
 

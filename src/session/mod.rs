@@ -4,17 +4,19 @@ mod session_local;
 
 pub use session_broker::SessionBroker;
 pub use session_local::LocalSession;
+use tracing::*;
 
 use std::{
     io::{Read, Write},
     net::{TcpStream, ToSocketAddrs},
     path::Path,
+    time::Duration,
 };
 
 use crate::{
     algorithm::{Compress, Digest, Enc, Kex, Mac, PubKey},
     client::Client,
-    config::{algorithm::AlgList, version::SshVersion, Config},
+    config::{algorithm::AlgList, Config},
     error::SshResult,
     model::{Packet, SecPacket},
 };
@@ -47,15 +49,16 @@ where
             }
             .connect(),
             SessionState::Version(mut config, mut stream) => {
-                log::info!("start for version negotiation.");
-                // Receive the server version
-                let version = SshVersion::from(&mut stream, config.timeout)?;
-                // Version validate
-                version.validate()?;
+                info!("start for version negotiation.");
                 // Send Client version
-                SshVersion::write(&mut stream)?;
-                // Store the version info
-                config.ver = version;
+                config.ver.send_our_version(&mut stream)?;
+
+                // Receive the server version
+                config
+                    .ver
+                    .read_server_version(&mut stream, config.timeout)?;
+                // Version validate
+                config.ver.validate()?;
 
                 // from now on
                 // each step of the interaction is subject to the ssh constraints on the packet
@@ -75,7 +78,7 @@ where
                 digest.hash_ctx.set_i_s(server_algs.get_inner());
                 let server_algs = AlgList::unpack(server_algs)?;
                 client.key_agreement(&mut stream, server_algs, &mut digest)?;
-                client.do_auth(&mut stream, &mut digest)?;
+                client.do_auth(&mut stream, &digest)?;
                 Ok(Self {
                     inner: SessionState::Connected(client, stream),
                 })
@@ -138,11 +141,8 @@ impl SessionBuilder {
         }
     }
 
-    /// add a globle r/w timeout for local ssh mode
-    ///
-    /// set 0 to disable
-    ///
-    pub fn timeout(mut self, timeout: u128) -> Self {
+    /// Read/Write timeout for local SSH mode. Use None to disable timeout.
+    pub fn timeout(mut self, timeout: Option<Duration>) -> Self {
         self.config.timeout = timeout;
         self
     }
@@ -163,7 +163,7 @@ impl SessionBuilder {
     {
         match self.config.auth.private_key(private_key) {
             Ok(_) => (),
-            Err(e) => log::error!(
+            Err(e) => error!(
                 "Parse private key from string: {}, will fallback to password authentication",
                 e
             ),
@@ -177,7 +177,7 @@ impl SessionBuilder {
     {
         match self.config.auth.private_key_path(key_path) {
             Ok(_) => (),
-            Err(e) => log::error!(
+            Err(e) => error!(
                 "Parse private key from file: {}, will fallback to password authentication",
                 e
             ),
@@ -246,7 +246,12 @@ impl SessionBuilder {
         A: ToSocketAddrs,
     {
         // connect tcp by default
-        let tcp = TcpStream::connect(addr)?;
+        let tcp = if let Some(ref to) = self.config.timeout {
+            TcpStream::connect_timeout(&addr.to_socket_addrs()?.next().unwrap(), *to)?
+        } else {
+            TcpStream::connect(addr)?
+        };
+
         // default nonblocking
         tcp.set_nonblocking(true).unwrap();
         self.connect_bio(tcp)

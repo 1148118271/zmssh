@@ -1,5 +1,5 @@
 use super::channel::Channel;
-use crate::constant::{ssh_msg_code, ssh_str};
+use crate::constant::{ssh_connection_code, ssh_str};
 use crate::error::SshResult;
 use crate::model::{Data, TerminalSize};
 use std::{
@@ -14,7 +14,7 @@ where
     S: Read + Write,
 {
     pub(crate) fn open(channel: Channel<S>, tv: TerminalSize) -> SshResult<Self> {
-        // shell 形式需要一个伪终端
+        // to open a shell channel, we need to request a pesudo-terminal
         let mut channel_shell = ChannelShell(channel);
         channel_shell.request_pty(tv)?;
         channel_shell.get_shell()?;
@@ -23,9 +23,8 @@ where
 
     fn request_pty(&mut self, tv: TerminalSize) -> SshResult<()> {
         let tvs = tv.fetch();
-        println!("tvs {:?}", tvs);
         let mut data = Data::new();
-        data.put_u8(ssh_msg_code::SSH_MSG_CHANNEL_REQUEST)
+        data.put_u8(ssh_connection_code::CHANNEL_REQUEST)
             .put_u32(self.server_channel_no)
             .put_str(ssh_str::PTY_REQ)
             .put_u8(false as u8)
@@ -47,7 +46,7 @@ where
 
     fn get_shell(&mut self) -> SshResult<()> {
         let mut data = Data::new();
-        data.put_u8(ssh_msg_code::SSH_MSG_CHANNEL_REQUEST)
+        data.put_u8(ssh_connection_code::CHANNEL_REQUEST)
             .put_u32(self.server_channel_no)
             .put_str(ssh_str::SHELL)
             .put_u8(false as u8);

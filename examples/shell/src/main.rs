@@ -1,12 +1,24 @@
-use ssh_rs::{ssh, LocalShell, SshErrorKind};
+use ssh::{self, LocalShell, SshError};
+use tracing::Level;
+use tracing_subscriber::FmtSubscriber;
+
+use std::time::Duration;
 
 fn main() {
-    ssh::enable_log();
+    // a builder for `FmtSubscriber`.
+    let subscriber = FmtSubscriber::builder()
+        // all spans/events with a level higher than INFO (e.g, info, warn, etc.)
+        // will be written to stdout.
+        .with_max_level(Level::INFO)
+        // completes the builder.
+        .finish();
+
+    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
     let mut session = ssh::create_session()
         .username("ubuntu")
         .password("password")
-        .timeout(1000)
+        .timeout(Some(Duration::from_millis(1000)))
         .private_key_path("./id_rsa")
         .connect("127.0.0.1:22")
         .unwrap()
@@ -31,7 +43,7 @@ fn run_shell(shell: &mut LocalShell<std::net::TcpStream>) {
         match shell.read() {
             Ok(out) => print!("{}", String::from_utf8(out).unwrap()),
             Err(e) => {
-                if let SshErrorKind::Timeout = e.kind() {
+                if let SshError::TimeoutError = e {
                     break;
                 } else {
                     panic!("{}", e.to_string())

@@ -1,3 +1,5 @@
+#[cfg(feature = "deprecated-zlib")]
+use crate::algorithm::{compression, Compress};
 use crate::{
     algorithm::{
         encryption,
@@ -8,12 +10,13 @@ use crate::{
         Digest,
     },
     client::Client,
-    config::{algorithm::AlgList, version::SshVersion},
-    constant::ssh_msg_code,
+    config::algorithm::AlgList,
+    constant::ssh_transport_code,
     error::{SshError, SshResult},
     model::{Data, Packet, SecPacket},
 };
 use std::io::{Read, Write};
+use tracing::*;
 
 impl Client {
     pub fn key_agreement<S>(
@@ -26,13 +29,11 @@ impl Client {
         S: Read + Write,
     {
         // initialize the hash context
-        if let SshVersion::V2(ref our, ref their) = self.config.ver {
-            digest.hash_ctx.set_v_c(our);
-            digest.hash_ctx.set_v_s(their);
-        }
+        digest.hash_ctx.set_v_c(&self.config.ver.client_ver);
+        digest.hash_ctx.set_v_s(&self.config.ver.server_ver);
 
-        log::info!("start for key negotiation.");
-        log::info!("send client algorithm list.");
+        info!("start for key negotiation.");
+        info!("send client algorithm list.");
 
         let algs = self.config.algs.clone();
         let client_algs = algs.pack(self);
@@ -79,9 +80,18 @@ impl Client {
         self.session_id = session_id;
         self.negotiated = negotiated;
         self.encryptor = encryption;
+
+        #[cfg(feature = "deprecated-zlib")]
+        {
+            if let Compress::Zlib = self.negotiated.c_compress[0] {
+                let comp = compression::from(&Compress::Zlib);
+                self.compressor = comp;
+            }
+        }
+
         digest.key_exchange = Some(key_exchange);
 
-        log::info!("key negotiation successful.");
+        info!("key negotiation successful.");
 
         Ok(())
     }
@@ -92,7 +102,7 @@ impl Client {
         S: Read + Write,
     {
         let mut data = Data::new();
-        data.put_u8(ssh_msg_code::SSH_MSG_KEXDH_INIT)
+        data.put_u8(ssh_transport_code::KEXDH_INIT)
             .put_u8s(public_key);
         data.pack(self).write_stream(stream)
     }
@@ -112,19 +122,20 @@ impl Client {
             let mut data = Data::unpack(SecPacket::from_stream(stream, self)?)?;
             let message_code = data.get_u8();
             match message_code {
-                ssh_msg_code::SSH_MSG_KEXDH_REPLY => {
-                    // 生成session_id并且获取signature
+                ssh_transport_code::KEXDH_REPLY => {
+                    // Generate the session id, get the signature
                     let sig = self.generate_signature(data, h, key_exchange)?;
-                    // 验签
+                    // verify the signature
                     session_id = hash::digest(&h.as_bytes(), key_exchange.get_hash_type());
                     let flag = public_key.verify_signature(&h.k_s, &session_id, &sig)?;
                     if !flag {
-                        log::error!("signature verification failure.");
-                        return Err(SshError::from("signature verification failure."));
+                        let err_msg = "signature verification failure.".to_owned();
+                        error!(err_msg);
+                        return Err(SshError::KexError(err_msg));
                     }
-                    log::info!("signature verification success.");
+                    info!("signature verification success.");
                 }
-                ssh_msg_code::SSH_MSG_NEWKEYS => {
+                ssh_transport_code::NEWKEYS => {
                     self.new_keys(stream)?;
                     return Ok(session_id);
                 }
@@ -133,7 +144,7 @@ impl Client {
         }
     }
 
-    /// 生成签名
+    /// get the signature
     fn generate_signature(
         &mut self,
         mut data: Data,
@@ -142,10 +153,11 @@ impl Client {
     ) -> SshResult<Vec<u8>> {
         let ks = data.get_u8s();
         h.set_k_s(&ks);
-        // TODO 未进行密钥指纹验证！！
+        // TODO:
+        //   No fingerprint verification
         let qs = data.get_u8s();
-        h.set_q_c(key_exchange.get_public_key());
-        h.set_q_s(&qs);
+        h.set_e(key_exchange.get_public_key());
+        h.set_f(&qs);
         let vec = key_exchange.get_shared_secret(qs)?;
         h.set_k(&vec);
         let h = data.get_u8s();
@@ -155,14 +167,14 @@ impl Client {
         Ok(signature)
     }
 
-    /// SSH_MSG_NEWKEYS 代表密钥交换完成
+    /// NEWKEYS indicates that kex is done
     fn new_keys<S>(&mut self, stream: &mut S) -> SshResult<()>
     where
         S: Write,
     {
         let mut data = Data::new();
-        data.put_u8(ssh_msg_code::SSH_MSG_NEWKEYS);
-        log::info!("send new keys");
+        data.put_u8(ssh_transport_code::NEWKEYS);
+        info!("send new keys");
         data.pack(self).write_stream(stream)
     }
 }

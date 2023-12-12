@@ -4,45 +4,98 @@ use crate::error::SshResult;
 
 use super::Packet;
 
-/// **byte**
-/// byte 标识任意一个 8 位值（8 位字节）。固定长度的数据有时被表示为一个字节数组，写
-/// 作 byte[[n]]，其中 n 是数组中字节的数量。
+/// Data Type Representations Used in the SSH Protocols
+/// <https://www.rfc-editor.org/rfc/rfc4251#section-5>
+
+/// byte
+///
+/// A byte represents an arbitrary 8-bit value (octet).  Fixed length
+/// data is sometimes represented as an array of bytes, written
+/// byte[n], where n is the number of bytes in the array.
 ///
 /// **boolean**
-/// 一个布尔值作为一个字节存储。0 表示 FALSE，1 表示 TRUE。所有非零的值必须被解释为
-/// TRUE；但是，应用软件禁止储存除 0 和 1 以外的值。
+///
+/// A boolean value is stored as a single byte.  The value 0
+/// represents FALSE, and the value 1 represents TRUE.  All non-zero
+/// values MUST be interpreted as TRUE; however, applications MUST NOT
+/// store values other than 0 and 1.
 ///
 /// **uint32**
-/// 表示一个 32 位无符号整数。按重要性降序（网络字节顺序）储存为 4 个字节。
+///
+/// Represents a 32-bit unsigned integer.  Stored as four bytes in the
+/// order of decreasing significance (network byte order).  For
+/// example: the value 699921578 (0x29b7f4aa) is stored as 29 b7 f4
+/// aa.
 ///
 /// **uint64**
-/// 表示一个 64 位无符号整数。按重要性降序（网络字节顺序）储存为 8 个字节。
+///
+/// Represents a 64-bit unsigned integer.  Stored as eight bytes in
+/// the order of decreasing significance (network byte order).
 ///
 /// **string**
-/// 任意长度二进制字符串。字符串用于装载任意二进制数据，包括空字符和 8 位字符。字符
-/// 串被储存为 1 个包含其长度（后续字节数量）的 uint32 以及 0（=空字符串）或作为字符
-/// 串的值的更多的字节。不使用终结符（空字符）。
-/// 字符串也被用来存储文本。在这种情况下，内部名称使用 US-ASCII，可能显示给用户的
-/// 文本使用 ISO-10646 UTF-8。终结符（空字符）一般不应被保存在字符串中。例如，
-/// US-ASCII 字符串”testing”被表示为 00 00 00 07 t e s t i n g。UTF-8 映射不
-/// 改变 US-ASCII 字符的编码。
+///
+/// Arbitrary length binary string.  Strings are allowed to contain
+/// arbitrary binary data, including null characters and 8-bit
+/// characters.  They are stored as a uint32 containing its length
+/// (number of bytes that follow) and zero (= empty string) or more
+/// bytes that are the value of the string.  Terminating null
+/// characters are not used.
+///
+/// Strings are also used to store text.  In that case, US-ASCII is
+/// used for internal names, and ISO-10646 UTF-8 for text that might
+/// be displayed to the user.  The terminating null character SHOULD
+/// NOT normally be stored in the string.  For example: the US-ASCII
+/// string "testing" is represented as 00 00 00 07 t e s t i n g.  The
+/// UTF-8 mapping does not alter the encoding of US-ASCII characters.
 ///
 /// **mpint**
-/// 表示二进制补码（two’s complement）格式的多精度整数，存储为一个字符串，每字节
-/// 8 位，从高位到低位（MSB first）。负数的数据区的首字节的最高位（the most
-/// significant bit）的值为 1。对于正数，如果最高位将被置为 1，则必须在前面加一个
-/// 值为 0 的字节。禁止包含值为 0 或 255 的非必要的前导字节（leading bytes）。零必
-/// 须被存储为具有 0 个字节的数据的字符串。
+///
+/// Represents multiple precision integers in two's complement format,
+/// stored as a string, 8 bits per byte, MSB first.  Negative numbers
+/// have the value 1 as the most significant bit of the first byte of
+/// the data partition.  If the most significant bit would be set for
+/// a positive number, the number MUST be preceded by a zero byte.
+/// Unnecessary leading bytes with the value 0 or 255 MUST NOT be
+/// included.  The value zero MUST be stored as a string with zero
+/// bytes of data.
+///
+/// By convention, a number that is used in modular computations in
+/// Z_n SHOULD be represented in the range 0 <= x < n.
+///
+///    Examples:
+///
+///    value (hex)        representation (hex)
+///    -----------        --------------------
+///    0                  00 00 00 00
+///    9a378f9b2e332a7    00 00 00 08 09 a3 78 f9 b2 e3 32 a7
+///    80                 00 00 00 02 00 80
+///    -1234              00 00 00 02 ed cc
+///    -deadbeef          00 00 00 05 ff 21 52 41 11
 ///
 /// **name-list**
-/// 一个包含逗号分隔的名称列表的字符串。名称列表表示为一个含有其长度（后续字节数量）
-/// 的 uint32，加上一个包含 0 或多个逗号分隔的名称的列表。名称的长度禁止为 0，并且禁
-/// 止包含逗号(",")。由于这是一个名称列表，所有被包含的元素都是名称并且必须使用
-/// US-ASCII。上下文可能对名称有附加的限制。例如，名称列表中的名称可能必须是一系列
-/// 有效的算法标识，或一系列[[RFC3066]]语言标识。名称列表中名称的顺序可能有也可能没
-/// 有意义。这取决于使用列表时的上下文。对单个名称或整个列表都禁止使用终结字符（空
-/// 字符）。
 ///
+/// A string containing a comma-separated list of names.  A name-list
+/// is represented as a uint32 containing its length (number of bytes
+/// that follow) followed by a comma-separated list of zero or more
+/// names.  A name MUST have a non-zero length, and it MUST NOT
+/// contain a comma (",").  As this is a list of names, all of the
+/// elements contained are names and MUST be in US-ASCII.  Context may
+/// impose additional restrictions on the names.  For example, the
+/// names in a name-list may have to be a list of valid algorithm
+/// identifiers (see Section 6 below), or a list of [RFC3066] language
+/// tags.  The order of the names in a name-list may or may not be
+/// significant.  Again, this depends on the context in which the list
+/// is used.  Terminating null characters MUST NOT be used, neither
+/// for the individual names, nor for the list as a whole.
+///
+///  Examples:
+///
+///  value                      representation (hex)
+///  -----                      --------------------
+///  (), the empty name-list    00 00 00 00
+///  ("zlib")                   00 00 00 04 7a 6c 69 62
+///  ("zlib,none")              00 00 00 09 7a 6c 69 62 2c 6e 6f 6e 65
+
 #[derive(Debug, Clone)]
 pub(crate) struct Data(Vec<u8>);
 
@@ -64,21 +117,20 @@ impl Data {
         Data(v)
     }
 
-    // 无符号字节 8位
+    // write uint8
     pub fn put_u8(&mut self, v: u8) -> &mut Self {
         self.0.push(v);
         self
     }
 
-    // 32位无符号整型
+    // write uint32
     pub fn put_u32(&mut self, v: u32) -> &mut Self {
         let vec = v.to_be_bytes().to_vec();
         self.0.extend(&vec);
         self
     }
 
-    // 字符串型数据
-    // 需要计算字符串长度
+    // write string
     pub fn put_str(&mut self, str: &str) -> &mut Self {
         let v = str.as_bytes();
         self.put_u32(v.len() as u32);
@@ -86,20 +138,14 @@ impl Data {
         self
     }
 
-    // 字节数组
-    // 需要计算数组长度
+    // write [bytes]
     pub fn put_u8s(&mut self, v: &[u8]) -> &mut Self {
         self.put_u32(v.len() as u32);
         self.0.extend(v);
         self
     }
 
-    // 表示二进制补码（two’s complement）格式的多精度整数
-    // 存储为一个字符串，每字节8 位，从高位到低位（MSB first）。
-    // 负数的数据区的首字节的最高位（the most significant bit）的值为 1。
-    // 对于正数，如果最高位将被置为 1，则必须在前面加一个值为 0 的字节。
-    // 禁止包含值为 0 或 255 的非必要的前导字节（leading bytes）。
-    // 零必须被存储为具有 0 个字节的数据的字符串。
+    // write mpint
     pub fn put_mpint(&mut self, v: &[u8]) -> Vec<u8> {
         let mut result: Vec<u8> = Vec::new();
         // 0x80 = 128
@@ -110,26 +156,26 @@ impl Data {
         self.put_u8s(&result).to_vec()
     }
 
-    // 跳过多少位数据
+    // skip `size`
     pub fn skip(&mut self, size: usize) {
         self.0.drain(..size);
     }
 
-    // 获取字节
+    // get uint8
     pub fn get_u8(&mut self) -> u8 {
         self.0.remove(0)
     }
 
-    // 获取32位无符号整型
+    // get uint32
     pub fn get_u32(&mut self) -> u32 {
-        let u32_buf = self.0.drain(..4).into_iter().collect::<Vec<u8>>();
+        let u32_buf = self.0.drain(..4).collect::<Vec<u8>>();
         u32::from_be_bytes(u32_buf.try_into().unwrap())
     }
 
-    // 获取字节数组
+    // get [bytes]
     pub fn get_u8s(&mut self) -> Vec<u8> {
         let len = self.get_u32() as usize;
-        let bytes = self.0.drain(..len).into_iter().collect::<Vec<u8>>();
+        let bytes = self.0.drain(..len).collect::<Vec<u8>>();
         bytes
     }
 

@@ -1,5 +1,9 @@
+#[cfg(feature = "deprecated-aes-cbc")]
+mod aes_cbc;
 mod aes_ctr;
 mod chacha20_poly1305_openssh;
+#[cfg(feature = "deprecated-des-cbc")]
+mod des_cbc;
 
 use crate::algorithm::hash::Hash;
 use crate::algorithm::mac::Mac;
@@ -7,18 +11,10 @@ use crate::SshResult;
 
 use super::{hash::HashCtx, mac::MacNone, Enc};
 
-/// # 加密算法
-/// 在密钥交互中将协商出一种加密算法和一个密钥。当加密生效时，每个数据包的数据包长度、填
-/// 充长度、有效载荷和填充域必须使用给定的算法加密。
-/// 所有从一个方向发送的数据包中的加密数据应被认为是一个数据流。例如，初始向量应从一个数
-/// 据包的结束传递到下一个数据包的开始。所有加密器应使用有效密钥长度为 128 位或以上的密
-/// 钥。
-/// 两个方向上的加密器必须独立运行。如果本地策略允许多种算法，系统实现必须允许独立选择每
-/// 个方向上的算法。但是，在实际使用中，推荐在两个方向上使用相同的算法。
+/// <https://www.rfc-editor.org/rfc/rfc4253#section-6.3>
 pub(crate) trait Encryption: Send + Sync {
     fn bsize(&self) -> usize;
     fn iv_size(&self) -> usize;
-    fn group_size(&self) -> usize;
     fn new(hash: Hash, mac: Box<dyn Mac>) -> Self
     where
         Self: Sized;
@@ -26,7 +22,7 @@ pub(crate) trait Encryption: Send + Sync {
     fn decrypt(&mut self, sequence_number: u32, buf: &mut [u8]) -> SshResult<Vec<u8>>;
     fn packet_len(&mut self, sequence_number: u32, buf: &[u8]) -> usize;
     fn data_len(&mut self, sequence_number: u32, buf: &[u8]) -> usize;
-    fn is_cp(&self) -> bool;
+    fn no_pad(&self) -> bool;
 }
 
 pub(crate) fn from(s: &Enc, hash: Hash, mac: Box<dyn Mac>) -> Box<dyn Encryption> {
@@ -37,6 +33,14 @@ pub(crate) fn from(s: &Enc, hash: Hash, mac: Box<dyn Mac>) -> Box<dyn Encryption
         Enc::Aes128Ctr => Box::new(aes_ctr::Ctr128::new(hash, mac)),
         Enc::Aes192Ctr => Box::new(aes_ctr::Ctr192::new(hash, mac)),
         Enc::Aes256Ctr => Box::new(aes_ctr::Ctr256::new(hash, mac)),
+        #[cfg(feature = "deprecated-aes-cbc")]
+        Enc::Aes128Cbc => Box::new(aes_cbc::Cbc128::new(hash, mac)),
+        #[cfg(feature = "deprecated-aes-cbc")]
+        Enc::Aes192Cbc => Box::new(aes_cbc::Cbc192::new(hash, mac)),
+        #[cfg(feature = "deprecated-aes-cbc")]
+        Enc::Aes256Cbc => Box::new(aes_cbc::Cbc256::new(hash, mac)),
+        #[cfg(feature = "deprecated-des-cbc")]
+        Enc::TripleDesCbc => Box::new(des_cbc::Cbc::new(hash, mac)),
     }
 }
 
@@ -47,10 +51,6 @@ impl Encryption for EncryptionNone {
         8
     }
     fn iv_size(&self) -> usize {
-        8
-    }
-
-    fn group_size(&self) -> usize {
         8
     }
 
@@ -72,7 +72,7 @@ impl Encryption for EncryptionNone {
     fn data_len(&mut self, sequence_number: u32, buf: &[u8]) -> usize {
         self.packet_len(sequence_number, buf) + 4
     }
-    fn is_cp(&self) -> bool {
+    fn no_pad(&self) -> bool {
         false
     }
 }

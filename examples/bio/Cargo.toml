@@ -7,3 +7,5 @@ edition = "2021"
 
 [dependencies]
 ssh-rs = { path = "../../" }
+tracing = { version = "^0.1", features = ["log"] }
+tracing-subscriber = { version = "^0.3" }

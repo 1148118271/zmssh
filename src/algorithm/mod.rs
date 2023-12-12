@@ -1,3 +1,4 @@
+pub(crate) mod compression;
 pub(crate) mod encryption;
 pub(crate) mod hash;
 pub(crate) mod key_exchange;
@@ -19,6 +20,18 @@ pub enum Enc {
     Aes192Ctr,
     #[strum(serialize = "aes256-ctr")]
     Aes256Ctr,
+    #[cfg(feature = "deprecated-aes-cbc")]
+    #[strum(serialize = "aes128-cbc")]
+    Aes128Cbc,
+    #[cfg(feature = "deprecated-aes-cbc")]
+    #[strum(serialize = "aes192-cbc")]
+    Aes192Cbc,
+    #[cfg(feature = "deprecated-aes-cbc")]
+    #[strum(serialize = "aes256-cbc")]
+    Aes256Cbc,
+    #[cfg(feature = "deprecated-des-cbc")]
+    #[strum(serialize = "3des-cbc")]
+    TripleDesCbc,
 }
 
 /// key exchange algorithm
@@ -28,7 +41,7 @@ pub enum Kex {
     Curve25519Sha256,
     #[strum(serialize = "ecdh-sha2-nistp256")]
     EcdhSha2Nistrp256,
-    #[cfg(feature = "dangerous-dh-group1-sha1")]
+    #[cfg(feature = "deprecated-dh-group1-sha1")]
     #[strum(serialize = "diffie-hellman-group1-sha1")]
     DiffieHellmanGroup1Sha1,
     #[strum(serialize = "diffie-hellman-group14-sha1")]
@@ -42,13 +55,16 @@ pub enum Kex {
 pub enum PubKey {
     #[strum(serialize = "ssh-ed25519")]
     SshEd25519,
-    #[cfg(feature = "dangerous-rsa-sha1")]
+    #[cfg(feature = "deprecated-rsa-sha1")]
     #[strum(serialize = "ssh-rsa")]
     SshRsa,
     #[strum(serialize = "rsa-sha2-256")]
     RsaSha2_256,
     #[strum(serialize = "rsa-sha2-512")]
     RsaSha2_512,
+    #[cfg(feature = "deprecated-dss-sha1")]
+    #[strum(serialize = "ssh-dss")]
+    SshDss,
 }
 
 /// MAC(message authentication code) algorithm
@@ -67,6 +83,11 @@ pub enum Mac {
 pub enum Compress {
     #[strum(serialize = "none")]
     None,
+    #[cfg(feature = "deprecated-zlib")]
+    #[strum(serialize = "zlib")]
+    Zlib,
+    #[strum(serialize = "zlib@openssh.com")]
+    ZlibOpenSsh,
 }
 
 #[derive(Default)]

@@ -6,7 +6,7 @@ use crate::{
     util::{check_path, file_time},
 };
 use crate::{
-    constant::{ssh_msg_code, ssh_str},
+    constant::{ssh_connection_code, ssh_str},
     error::SshError,
 };
 use crate::{model::Data, util};
@@ -16,8 +16,10 @@ use std::{
     io::{Read, Write},
     ops::{Deref, DerefMut},
     path::Path,
+    str::FromStr,
     time::SystemTime,
 };
+use tracing::*;
 
 pub struct ChannelScp<S: Read + Write>(Channel<S>);
 
@@ -31,7 +33,7 @@ where
 
     fn exec_scp(&mut self, command: &str) -> SshResult<()> {
         let mut data = Data::new();
-        data.put_u8(ssh_msg_code::SSH_MSG_CHANNEL_REQUEST)
+        data.put_u8(ssh_connection_code::CHANNEL_REQUEST)
             .put_u32(self.server_channel_no)
             .put_str(ssh_str::EXEC)
             .put_u8(true as u8)
@@ -60,8 +62,8 @@ where
         match vec[0] {
             scp::END => Ok(()),
             // error
-            scp::ERR | scp::FATAL_ERR => Err(SshError::from(util::from_utf8(vec)?)),
-            _ => Err(SshError::from("unknown error.")),
+            scp::ERR | scp::FATAL_ERR => Err(SshError::ScpError(String::from_utf8(vec)?)),
+            _ => Err(SshError::ScpError("unknown error.".to_owned())),
         }
     }
 
@@ -97,11 +99,10 @@ where
         let remote_path_str = remote_path.to_str().unwrap();
         let local_path_str = local_path.to_str().unwrap();
 
-        log::info!(
+        info!(
             "start to upload files, \
         local [{}] files will be synchronized to the remote [{}] folder.",
-            local_path_str,
-            remote_path_str
+            local_path_str, remote_path_str
         );
 
         self.exec_scp(self.command_init(remote_path_str, scp::SINK).as_str())?;
@@ -110,27 +111,25 @@ where
         scp_file.local_path = local_path.to_path_buf();
         self.file_all(&mut scp_file)?;
 
-        log::info!("files upload successful.");
+        info!("files upload successful.");
 
         self.close()
     }
 
     fn file_all(&mut self, scp_file: &mut ScpFile) -> SshResult<()> {
-        // 如果获取不到文件或者目录名的话，就不处理该数据
-        // 如果文件不是有效的Unicode数据的话，也不处理
+        // test if input file path valid
         scp_file.name = match scp_file.local_path.file_name() {
             None => return Ok(()),
             Some(name) => match name.to_str() {
                 None => return Ok(()),
-                Some(name) => name.to_string(),
+                Some(name) => name.to_owned(),
             },
         };
         self.send_time(scp_file)?;
         if scp_file.local_path.is_dir() {
-            // 文件夹如果读取异常的话。就略过该文件夹
-            // 详细的错误信息请查看 [std::fs::read_dir] 方法介绍
+            // skip the read_dir errs
             if let Err(e) = fs::read_dir(scp_file.local_path.as_path()) {
-                log::error!("read dir error, error info: {}", e);
+                error!("read dir error, error info: {}", e);
                 return Ok(());
             }
             self.send_dir(scp_file)?;
@@ -141,13 +140,13 @@ where
                         self.file_all(scp_file)?
                     }
                     Err(e) => {
-                        // 暂不处理
-                        log::error!("dir entry error, error info: {}", e);
+                        // TODO
+                        error!("dir entry error, error info: {}", e);
                     }
                 }
             }
 
-            self.send_bytes(&[scp::E as u8, b'\n'])?;
+            self.send_bytes(&[scp::E, b'\n'])?;
             self.get_end()?;
         } else {
             scp_file.size = scp_file.local_path.as_path().metadata()?.len();
@@ -156,12 +155,11 @@ where
         Ok(())
     }
 
-    fn send_file(&mut self, scp_file: &mut ScpFile) -> SshResult<()> {
+    fn send_file(&mut self, scp_file: &ScpFile) -> SshResult<()> {
         let mut file = match File::open(scp_file.local_path.as_path()) {
             Ok(f) => f,
-            // 文件打开异常，不影响后续操作
             Err(e) => {
-                log::error!(
+                error!(
                     "failed to open the folder, \
             it is possible that the path does not exist, \
             which does not affect subsequent operations. \
@@ -172,10 +170,9 @@ where
             }
         };
 
-        log::debug!(
+        debug!(
             "name: [{}] size: [{}] type: [file] start upload.",
-            scp_file.name,
-            scp_file.size
+            scp_file.name, scp_file.size
         );
 
         let cmd = format!(
@@ -200,13 +197,13 @@ where
         }
         self.get_end()?;
 
-        log::debug!("file: [{}] upload completed.", scp_file.name);
+        debug!("file: [{}] upload completed.", scp_file.name);
 
         Ok(())
     }
 
     fn send_dir(&mut self, scp_file: &ScpFile) -> SshResult<()> {
-        log::debug!(
+        debug!(
             "name: [{}] size: [0], type: [dir] start upload.",
             scp_file.name
         );
@@ -215,7 +212,7 @@ where
         self.send_bytes(cmd.as_bytes())?;
         self.get_end()?;
 
-        log::debug!("dir: [{}] upload completed.", scp_file.name);
+        debug!("dir: [{}] upload completed.", scp_file.name);
 
         Ok(())
     }
@@ -229,14 +226,12 @@ where
 
     fn get_time(&self, scp_file: &mut ScpFile) -> SshResult<()> {
         let metadata = scp_file.local_path.as_path().metadata()?;
-        // 最后修改时间
         let modified_time = match metadata.modified() {
             Ok(t) => t,
             Err(_) => SystemTime::now(),
         };
         let modified_time = util::sys_time_to_secs(modified_time)?;
 
-        // 最后访问时间
         let accessed_time = match metadata.accessed() {
             Ok(t) => t,
             Err(_) => SystemTime::now(),
@@ -275,11 +270,10 @@ where
         let local_path_str = local_path.to_str().unwrap();
         let remote_path_str = remote_path.to_str().unwrap();
 
-        log::info!(
+        info!(
             "start to download files, \
         remote [{}] files will be synchronized to the local [{}] folder.",
-            remote_path_str,
-            local_path_str
+            remote_path_str, local_path_str
         );
 
         self.exec_scp(self.command_init(remote_path_str, scp::SOURCE).as_str())?;
@@ -287,7 +281,7 @@ where
         scp_file.local_path = local_path.to_path_buf();
         self.process_d(&mut scp_file, local_path)?;
 
-        log::info!("files download successful.");
+        info!("files download successful.");
 
         self.close()
     }
@@ -302,7 +296,6 @@ where
             let code = &data[0];
             match *code {
                 scp::T => {
-                    // 处理时间
                     let (modify_time, access_time) = file_time(data)?;
                     scp_file.modify_time = modify_time;
                     scp_file.access_time = access_time;
@@ -319,15 +312,17 @@ where
                     }
                 },
                 // error
-                scp::ERR | scp::FATAL_ERR => return Err(SshError::from(util::from_utf8(data)?)),
-                _ => return Err(SshError::from("unknown error.")),
+                scp::ERR | scp::FATAL_ERR => {
+                    return Err(SshError::ScpError(String::from_utf8(data)?))
+                }
+                _ => return Err(SshError::ScpError("unknown error.".to_owned())),
             }
         }
         Ok(())
     }
 
     fn process_dir_d(&mut self, data: Vec<u8>, scp_file: &mut ScpFile) -> SshResult<()> {
-        let string = util::from_utf8(data)?;
+        let string = String::from_utf8(data)?;
         let dir_info = string.trim();
         let split = dir_info.split(' ').collect::<Vec<&str>>();
         match split.get(2) {
@@ -336,7 +331,7 @@ where
         }
         scp_file.is_dir = true;
         let buf = scp_file.join(&scp_file.name);
-        log::debug!(
+        debug!(
             "name: [{}] size: [0], type: [dir] start download.",
             scp_file.name
         );
@@ -356,29 +351,23 @@ where
                     self.sync_permissions(scp_file, file);
                 }
                 Err(e) => {
-                    log::error!(
-                        "failed to open the folder, \
-            it is possible that the path does not exist, \
-            which does not affect subsequent operations. \
-            error info: {:?}, path: {:?}",
-                        e,
-                        scp_file.local_path.to_str()
-                    );
-                    return Err(SshError::from(format!("file open error: {}", e)));
+                    let err_msg = format!("file open error: {}", e);
+                    error!(err_msg);
+                    return Err(SshError::ScpError(err_msg));
                 }
             };
         }
 
-        log::debug!("dir: [{}] download completed.", scp_file.name);
+        debug!("dir: [{}] download completed.", scp_file.name);
         Ok(())
     }
 
     fn process_file_d(&mut self, data: Vec<u8>, scp_file: &mut ScpFile) -> SshResult<()> {
-        let string = util::from_utf8(data)?;
+        let string = String::from_utf8(data)?;
         let file_info = string.trim();
         let split = file_info.split(' ').collect::<Vec<&str>>();
         let size_str = *split.get(1).unwrap_or(&"0");
-        let size = util::str_to_i64(size_str)?;
+        let size = i64::from_str(size_str)?;
         scp_file.size = size as u64;
         match split.get(2) {
             None => return Ok(()),
@@ -389,10 +378,9 @@ where
     }
 
     fn save_file(&mut self, scp_file: &mut ScpFile) -> SshResult<()> {
-        log::debug!(
+        debug!(
             "name: [{}] size: [{}] type: [file] start download.",
-            scp_file.name,
-            scp_file.size
+            scp_file.name, scp_file.size
         );
         let path = scp_file.join(&scp_file.name);
         if path.exists() {
@@ -406,11 +394,9 @@ where
         {
             Ok(v) => v,
             Err(e) => {
-                log::error!("file processing error, error info: {}", e);
-                return Err(SshError::from(format!(
-                    "{:?} file processing exception",
-                    path
-                )));
+                let err_msg = format!("file open error: {}", e);
+                error!(err_msg);
+                return Err(SshError::ScpError(err_msg));
             }
         };
         self.send_end()?;
@@ -438,7 +424,7 @@ where
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         self.sync_permissions(scp_file, file);
 
-        log::debug!("file: [{}] download completed.", scp_file.name);
+        debug!("file: [{}] download completed.", scp_file.name);
         Ok(())
     }
 
@@ -449,7 +435,7 @@ where
         if let Err(e) =
             filetime::set_file_times(scp_file.local_path.as_path(), access_time, modify_time)
         {
-            log::error!(
+            error!(
                 "the file time synchronization is abnormal,\
              which may be caused by the operating system,\
               which does not affect subsequent operations.\
@@ -460,13 +446,13 @@ where
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    fn sync_permissions(&self, scp_file: &mut ScpFile, file: fs::File) {
+    fn sync_permissions(&self, scp_file: &ScpFile, file: fs::File) {
         let modify_time = filetime::FileTime::from_unix_time(scp_file.modify_time, 0);
         let access_time = filetime::FileTime::from_unix_time(scp_file.access_time, 0);
         if let Err(e) =
             filetime::set_file_times(scp_file.local_path.as_path(), access_time, modify_time)
         {
-            log::error!(
+            error!(
                 "the file time synchronization is abnormal,\
              which may be caused by the operating system,\
               which does not affect subsequent operations.\
@@ -489,14 +475,14 @@ where
                     .set_permissions(fs::Permissions::from_mode(mode))
                     .is_err()
                 {
-                    log::error!(
+                    error!(
                         "the operating system does not allow modification of file permissions, \
                         which does not affect subsequent operations."
                     );
                 }
             }
             Err(v) => {
-                log::error!("Unknown error {}", v)
+                error!("Unknown error {}", v)
             }
         }
     }

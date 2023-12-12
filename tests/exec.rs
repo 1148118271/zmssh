@@ -1,6 +1,6 @@
 mod tests {
     use paste::paste;
-    use ssh_rs::ssh;
+
     use std::env;
 
     macro_rules! env_getter {

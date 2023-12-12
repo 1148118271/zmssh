@@ -3,11 +3,12 @@ use std::{
     ops::{Deref, DerefMut},
     str::FromStr,
 };
+use tracing::*;
 
 use crate::{
     algorithm::{Compress, Enc, Kex, Mac, PubKey},
     client::Client,
-    constant::ssh_msg_code,
+    constant::ssh_transport_code,
     error::{SshError, SshResult},
     model::{Data, Packet, SecPacket},
     util,
@@ -126,21 +127,21 @@ impl AlgList {
             .into(),
             c_mac: vec![Mac::HmacSha2_256, Mac::HmacSha2_512, Mac::HmacSha1].into(),
             s_mac: vec![Mac::HmacSha2_256, Mac::HmacSha2_512, Mac::HmacSha1].into(),
-            c_compress: vec![Compress::None].into(),
-            s_compress: vec![Compress::None].into(),
+            c_compress: vec![Compress::None, Compress::ZlibOpenSsh].into(),
+            s_compress: vec![Compress::None, Compress::ZlibOpenSsh].into(),
         }
     }
 
     fn from(mut data: Data) -> SshResult<Self> {
         data.get_u8();
-        // 跳过16位cookie
+        // skip the 16-bit cookie
         data.skip(16);
         let mut server_algorithm = Self::new();
 
         macro_rules! try_convert {
             ($hint: literal, $field: ident) => {
                 let alg_string = util::vec_u8_to_string(data.get_u8s(), ",")?;
-                log::info!("server {}: {:?}", $hint, alg_string);
+                info!("server {}: {:?}", $hint, alg_string);
                 server_algorithm.$field = alg_string.try_into()?;
             };
         }
@@ -152,7 +153,7 @@ impl AlgList {
         try_convert!("s2c mac", s_mac);
         try_convert!("c2s compression", c_compress);
         try_convert!("s2c compression", s_compress);
-        log::debug!("converted server algorithms: [{:?}]", server_algorithm);
+        debug!("converted server algorithms: [{:?}]", server_algorithm);
         Ok(server_algorithm)
     }
 
@@ -169,15 +170,14 @@ impl AlgList {
                         }
                     })
                     .ok_or_else(|| {
-                        log::error!(
+                        let err_msg = format!(
                             "Key_agreement: the {} fails to match, \
-                    algorithms supported by the server: {},\
-                    algorithms supported by the client: {}",
-                            $err_hint,
-                            $their.$field,
-                            $our.$field
+                        algorithms supported by the server: {},\
+                        algorithms supported by the client: {}",
+                            $err_hint, $their.$field, $our.$field
                         );
-                        SshError::from("key exchange error.")
+                        error!(err_msg);
+                        SshError::KexError(err_msg)
                     })
             };
         }
@@ -209,7 +209,7 @@ impl AlgList {
             s_compress: vec![*s_compress].into(),
         };
 
-        log::info!("matched algorithms [{:?}]", negotiated);
+        info!("matched algorithms [{:?}]", negotiated);
 
         Ok(negotiated)
     }
@@ -230,9 +230,9 @@ impl AlgList {
 
 impl<'a> Packet<'a> for AlgList {
     fn pack(self, client: &'a mut Client) -> crate::model::SecPacket<'a> {
-        log::info!("client algorithms: [{:?}]", self);
+        info!("client algorithms: [{:?}]", self);
         let mut data = Data::new();
-        data.put_u8(ssh_msg_code::SSH_MSG_KEXINIT);
+        data.put_u8(ssh_transport_code::KEXINIT);
         data.extend(util::cookie());
         data.extend(self.as_i());
         data.put_str("")
@@ -248,7 +248,7 @@ impl<'a> Packet<'a> for AlgList {
         Self: Sized,
     {
         let data = pkt.into_inner();
-        assert_eq!(data[0], ssh_msg_code::SSH_MSG_KEXINIT);
+        assert_eq!(data[0], ssh_transport_code::KEXINIT);
         AlgList::from(data)
     }
 }

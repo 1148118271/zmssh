@@ -1,46 +1,55 @@
 use std::io::{Read, Write};
+use std::time::Duration;
 
 use crate::error::SshResult;
 use crate::{client::Client, model::Data};
 
 use super::timeout::Timeout;
 
-/// ## 数据包整体结构
+/// ## Binary Packet Protocol
 ///
-/// ### uint32 `packet_length`
+/// <https://www.rfc-editor.org/rfc/rfc4253#section-6>
 ///
-/// ### byte `padding_length`
+/// uint32 `packet_length`
 ///
-/// ### byte[[n1]] `payload`; n1 = packet_length - padding_length - 1
+/// byte `padding_length`
 ///
-/// ### byte[[n2]] `random padding`; n2 = padding_length
+/// byte[[n1]] `payload`; n1 = packet_length - padding_length - 1
 ///
-/// ### byte[[m]] `mac` (Message Authentication Code - MAC); m = mac_length
+/// byte[[n2]] `random padding`; n2 = padding_length
+///
+/// byte[[m]] `mac` (Message Authentication Code - MAC); m = mac_length
 ///
 /// ---
 ///
 /// **packet_length**
-/// 以字节为单位的`数据包长度`，不包括`mac`或`packet_length`域自身。
+/// The length of the packet in bytes, not including 'mac' or the 'packet_length' field itself.
 ///
 ///
 /// **padding_length**
-/// `random padding`的长度（字节）。
+/// Length of 'random padding' (bytes).
 ///
 ///
 /// **payload**
-/// 数据包中有用的内容。如果已经协商了压缩，该域是压缩的。初始时，压缩必须为"none"。
+///  The useful contents of the packet.  If compression has been negotiated, this field is compressed.
+/// Initially, compression MUST be "none".
 ///
 ///
 /// **random padding**
-/// 任意长度的填充，使(packet_length || padding_length || payload || random padding)的总长度是加密分组长度或 8 中较大者的倍数。
-/// 最少必须有 4 字节的填充。
-/// 填充应包含随机字节。填充的最大长度为 255 字节。
-///
+/// Arbitrary-length padding, such that the total length of
+/// (packet_length || padding_length || payload || random padding)
+/// is a multiple of the cipher block size or 8, whichever is
+/// larger.  There MUST be at least four bytes of padding.  The
+/// padding SHOULD consist of random bytes.  The maximum amount of
+/// padding is 255 bytes.
+
 ///
 /// **mac**
-/// 消息验证码。如果已经协商了消息验证，该域包含 MAC。初始时，MAC 算法必须是"none"。
+/// Message Authentication Code.  If message authentication has
+/// been negotiated, this field contains the MAC bytes.  Initially,
+/// the MAC algorithm MUST be "none".。
 
-fn read_with_timeout<S>(stream: &mut S, tm: u128, buf: &mut [u8]) -> SshResult<()>
+fn read_with_timeout<S>(stream: &mut S, tm: Option<Duration>, buf: &mut [u8]) -> SshResult<()>
 where
     S: Read,
 {
@@ -61,7 +70,7 @@ where
             }
             Err(e) => {
                 if let std::io::ErrorKind::WouldBlock = e.kind() {
-                    timeout.test()?;
+                    timeout.till_next_tick()?;
                     continue;
                 } else {
                     return Err(e.into());
@@ -71,7 +80,7 @@ where
     }
 }
 
-fn try_read<S>(stream: &mut S, _tm: u128, buf: &mut [u8]) -> SshResult<usize>
+fn try_read<S>(stream: &mut S, _tm: Option<Duration>, buf: &mut [u8]) -> SshResult<usize>
 where
     S: Read,
 {
@@ -87,7 +96,7 @@ where
     }
 }
 
-fn write_with_timeout<S>(stream: &mut S, tm: u128, buf: &[u8]) -> SshResult<()>
+fn write_with_timeout<S>(stream: &mut S, tm: Option<Duration>, buf: &[u8]) -> SshResult<()>
 where
     S: Write,
 {
@@ -108,7 +117,7 @@ where
             }
             Err(e) => {
                 if let std::io::ErrorKind::WouldBlock = e.kind() {
-                    timeout.test()?;
+                    timeout.till_next_tick()?;
                     continue;
                 } else {
                     return Err(e.into());
@@ -131,31 +140,35 @@ pub(crate) struct SecPacket<'a> {
 }
 
 impl<'a> SecPacket<'a> {
+    fn get_align(bsize: usize) -> i32 {
+        let bsize = bsize as i32;
+        if bsize > 8 {
+            bsize
+        } else {
+            8
+        }
+    }
+
     pub fn write_stream<S>(self, stream: &mut S) -> SshResult<()>
     where
         S: Write,
     {
         let tm = self.client.get_timeout();
-        let payload_len = self.payload.len() as u32;
-        let group_size = self.client.get_encryptor().group_size() as i32;
+        let payload = self.client.get_compressor().compress(&self.payload)?;
+        let payload_len = payload.len() as u32;
         let pad_len = {
-            let mut pad = payload_len as i32;
-            if self.client.get_encryptor().is_cp() {
-                pad += 1;
-            } else {
-                pad += 5
+            let mut pad = payload_len as i32 + 1;
+            let block_size = Self::get_align(self.client.get_encryptor().bsize());
+            if !self.client.get_encryptor().no_pad() {
+                pad += 4
             }
-            pad = (-pad) & (group_size as i32 - 1);
-            if pad < group_size {
-                pad += group_size;
-            }
-            pad as u32
+            (((-pad) & (block_size - 1)) + block_size) as u32
         } as u8;
         let packet_len = 1 + pad_len as u32 + payload_len;
         let mut buf = vec![];
         buf.extend(packet_len.to_be_bytes());
         buf.extend([pad_len]);
-        buf.extend(self.payload.iter());
+        buf.extend(payload);
         buf.extend(vec![0; pad_len as usize]);
         let seq = self.client.get_seq().get_client();
         self.client.get_encryptor().encrypt(seq, &mut buf);
@@ -167,14 +180,7 @@ impl<'a> SecPacket<'a> {
         S: Read,
     {
         let tm = client.get_timeout();
-        let bsize = {
-            let bsize = client.get_encryptor().bsize();
-            if bsize > 8 {
-                bsize
-            } else {
-                8
-            }
-        };
+        let bsize = Self::get_align(client.get_encryptor().bsize()) as usize;
 
         // read the first block
         let mut first_block = vec![0; bsize];
@@ -198,6 +204,7 @@ impl<'a> SecPacket<'a> {
         let payload_len = pkt_len - pad_len as u32 - 1;
 
         let payload = data[5..payload_len as usize + 5].into();
+        let payload = client.get_compressor().decompress(payload)?.into();
 
         Ok(Self { payload, client })
     }
@@ -207,14 +214,7 @@ impl<'a> SecPacket<'a> {
         S: Read,
     {
         let tm = client.get_timeout();
-        let bsize = {
-            let bsize = client.get_encryptor().bsize();
-            if bsize > 8 {
-                bsize
-            } else {
-                8
-            }
-        };
+        let bsize = Self::get_align(client.get_encryptor().bsize()) as usize;
 
         // read the first block
         let mut first_block = vec![0; bsize];

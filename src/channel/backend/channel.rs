@@ -6,13 +6,16 @@ use std::{
 
 use crate::{
     client::Client,
-    constant::ssh_msg_code,
+    constant::ssh_connection_code,
     error::{SshError, SshResult},
     model::{BackendResp, BackendRqst, Data, FlowControl, Packet},
     TerminalSize,
 };
+use tracing::*;
 
-use super::{channel_exec::ExecBroker, channel_scp::ScpBroker, channel_shell::ShellBrocker};
+#[cfg(feature = "scp")]
+use super::channel_scp::ScpBroker;
+use super::{channel_exec::ExecBroker, channel_shell::ShellBrocker};
 
 pub(crate) struct Channel {
     snd: Sender<BackendResp>,
@@ -63,7 +66,7 @@ impl Channel {
 
                 // send it
                 let mut data = Data::new();
-                data.put_u8(ssh_msg_code::SSH_MSG_CHANNEL_DATA)
+                data.put_u8(ssh_connection_code::CHANNEL_DATA)
                     .put_u32(self.server_channel_no)
                     .put_u8s(&self.pending_send);
 
@@ -85,7 +88,9 @@ impl Channel {
         if !self.is_close() {
             data.pack(client).write_stream(stream)
         } else {
-            Err(SshError::from("Send data on a closed channel"))
+            Err(SshError::GeneralError(
+                "Send data on a closed channel".to_owned(),
+            ))
         }
     }
 
@@ -111,7 +116,7 @@ impl Channel {
         S: Read + Write,
     {
         let mut data = Data::new();
-        data.put_u8(ssh_msg_code::SSH_MSG_CHANNEL_WINDOW_ADJUST)
+        data.put_u8(ssh_connection_code::CHANNEL_WINDOW_ADJUST)
             .put_u32(self.server_channel_no)
             .put_u32(to_add);
         self.flow_control.on_send(to_add);
@@ -136,13 +141,13 @@ impl Channel {
     }
 
     pub fn local_close(&mut self) -> SshResult<()> {
-        log::trace!("Channel {} send local close", self.client_channel_no);
+        trace!("Channel {} send local close", self.client_channel_no);
         self.local_close = true;
         Ok(())
     }
 
     pub fn remote_close(&mut self) -> SshResult<()> {
-        log::trace!("Channel {} recv remote close", self.client_channel_no);
+        trace!("Channel {} recv remote close", self.client_channel_no);
         self.remote_close = true;
         if !self.local_close {
             self.snd.send(BackendResp::Close)?;
@@ -167,7 +172,7 @@ impl Channel {
 
 impl Drop for Channel {
     fn drop(&mut self) {
-        log::info!("Channel {} closed", self.client_channel_no);
+        info!("Channel {} closed", self.client_channel_no);
     }
 }
 
@@ -203,6 +208,7 @@ impl ChannelBroker {
 
     /// open a [ScpBroker] channel which can download/upload files/directories
     ///
+    #[cfg(feature = "scp")]
     pub fn scp(self) -> SshResult<ScpBroker> {
         Ok(ScpBroker::open(self))
     }
@@ -222,7 +228,7 @@ impl ChannelBroker {
     fn close_no_consue(&mut self) -> SshResult<()> {
         if !self.close {
             let mut data = Data::new();
-            data.put_u8(ssh_msg_code::SSH_MSG_CHANNEL_CLOSE)
+            data.put_u8(ssh_connection_code::CHANNEL_CLOSE)
                 .put_u32(self.server_channel_no);
             self.close = true;
             self.snd
@@ -242,11 +248,10 @@ impl ChannelBroker {
             .send(BackendRqst::Command(self.client_channel_no, data))?;
         if !self.close {
             match self.rcv.recv().unwrap() {
-                BackendResp::Ok(_) => log::trace!("{}: control command ok", self.client_channel_no),
-                BackendResp::Fail(msg) => log::error!(
+                BackendResp::Ok(_) => trace!("{}: control command ok", self.client_channel_no),
+                BackendResp::Fail(msg) => error!(
                     "{}: channel error with reason {}",
-                    self.client_channel_no,
-                    msg
+                    self.client_channel_no, msg
                 ),
                 _ => unreachable!(),
             }
@@ -290,7 +295,9 @@ impl ChannelBroker {
                 Ok(None)
             }
         } else {
-            Err(SshError::from("Read data on a closed channel"))
+            Err(SshError::GeneralError(
+                "Read data on a closed channel".to_owned(),
+            ))
         }
     }
 

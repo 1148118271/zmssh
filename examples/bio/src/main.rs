@@ -1,8 +1,18 @@
-use ssh_rs::ssh;
+
 use std::net::{TcpStream, ToSocketAddrs};
+use tracing::Level;
+use tracing_subscriber::FmtSubscriber;
 
 fn main() {
-    ssh::enable_log();
+    // a builder for `FmtSubscriber`.
+    let subscriber = FmtSubscriber::builder()
+        // all spans/events with a level higher than INFO (e.g, info, warn, etc.)
+        // will be written to stdout.
+        .with_max_level(Level::INFO)
+        // completes the builder.
+        .finish();
+
+    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
     let bio = MyProxy::new("127.0.0.1:22");
 

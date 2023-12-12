@@ -3,9 +3,7 @@ use crate::constant::size::LOCAL_WINDOW_SIZE;
 use crate::constant::size;
 
 pub(crate) struct FlowControl {
-    /// 本地窗口大小
     local_window: u32,
-    /// 远程窗口大小
     remote_window: u32,
 }
 
@@ -24,7 +22,7 @@ impl FlowControl {
             self.local_window -= recv_len;
         } else {
             let drop_len = recv_len - self.local_window;
-            log::debug!("Recv more than expected, drop len {}", drop_len);
+            tracing::debug!("Recv more than expected, drop len {}", drop_len);
             buf.truncate(self.local_window as usize);
             self.local_window = 0;
         }

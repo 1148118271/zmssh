@@ -1,32 +1,19 @@
-use crate::error::{SshError, SshResult};
-use crate::slog::log;
+use crate::error::SshResult;
 use rand::rngs::OsRng;
 use rand::Rng;
+
+#[cfg(feature = "scp")]
+use crate::error::SshError;
+#[cfg(feature = "scp")]
 use std::{
     path::Path,
     str::FromStr,
     time::{SystemTime, UNIX_EPOCH},
 };
 
-pub(crate) fn from_utf8(v: Vec<u8>) -> SshResult<String> {
-    match String::from_utf8(v) {
-        Ok(v) => Ok(v),
-        Err(e) => {
-            let err_msg = format!("Byte to utf8 string error, error info: {:?}", e);
-            log::error!("{}", err_msg);
-            Err(SshError::from(err_msg))
-        }
-    }
-}
-
+#[cfg(feature = "scp")]
 pub(crate) fn sys_time_to_secs(time: SystemTime) -> SshResult<u64> {
-    match time.duration_since(UNIX_EPOCH) {
-        Ok(t) => Ok(t.as_secs()),
-        Err(e) => Err(SshError::from(format!(
-            "SystemTimeError difference: {:?}",
-            e.duration()
-        ))),
-    }
+    Ok(time.duration_since(UNIX_EPOCH)?.as_secs())
 }
 
 // a random cookie
@@ -36,29 +23,24 @@ pub(crate) fn cookie() -> Vec<u8> {
 }
 
 pub(crate) fn vec_u8_to_string(v: Vec<u8>, pat: &str) -> SshResult<Vec<String>> {
-    let result = from_utf8(v)?;
+    let result = String::from_utf8(v)?;
     let r: Vec<&str> = result.split(pat).collect();
     let mut vec = vec![];
     for x in r {
-        vec.push(x.to_string())
+        vec.push(x.to_owned())
     }
     Ok(vec)
 }
 
-pub(crate) fn str_to_i64(v: &str) -> SshResult<i64> {
-    match i64::from_str(v) {
-        Ok(v) => Ok(v),
-        Err(_) => Err(SshError::from("str to i64 error")),
-    }
-}
-
+#[cfg(feature = "scp")]
 pub(crate) fn check_path(path: &Path) -> SshResult<()> {
     if path.to_str().is_none() {
-        return Err(SshError::from("invalid path."));
+        return Err(SshError::InvalidScpFilePath);
     }
     Ok(())
 }
 
+#[cfg(feature = "scp")]
 pub(crate) fn file_time(v: Vec<u8>) -> SshResult<(i64, i64)> {
     let mut t = vec![];
     for x in v {
@@ -68,7 +50,7 @@ pub(crate) fn file_time(v: Vec<u8>) -> SshResult<(i64, i64)> {
         t.push(x)
     }
     let a = t.len() / 2;
-    let ct = from_utf8(t[..(a - 1)].to_vec())?;
-    let ut = from_utf8(t[a..(t.len() - 1)].to_vec())?;
-    Ok((str_to_i64(&ct)?, str_to_i64(&ut)?))
+    let ct = String::from_utf8(t[..(a - 1)].to_vec())?;
+    let ut = String::from_utf8(t[a..(t.len() - 1)].to_vec())?;
+    Ok((i64::from_str(&ct)?, i64::from_str(&ut)?))
 }

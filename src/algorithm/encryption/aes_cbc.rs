@@ -1,28 +1,28 @@
-use crate::algorithm::encryption::Encryption;
-use crate::algorithm::hash::Hash;
-use crate::algorithm::mac::Mac;
-use crate::error::SshError;
-use crate::SshResult;
-use aes::cipher::{KeyIvInit, StreamCipher, StreamCipherSeek};
-use ctr;
+use crate::{
+    algorithm::{hash::Hash, mac::Mac},
+    SshError, SshResult,
+};
+use aes::{
+    cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit},
+    Aes128, Aes192, Aes256,
+};
+use cipher::generic_array::GenericArray;
 
-type Aes128Ctr64BE = ctr::Ctr64BE<aes::Aes128>;
-type Aes192Ctr64BE = ctr::Ctr64BE<aes::Aes192>;
-type Aes256Ctr64BE = ctr::Ctr64BE<aes::Aes256>;
+use super::Encryption;
 
-const CTR128_KEY_SIZE: usize = 16;
-const CTR192_KEY_SIZE: usize = 24;
-const CTR256_KEY_SIZE: usize = 32;
+const CBC128_KEY_SIZE: usize = 16;
+const CBC192_KEY_SIZE: usize = 24;
+const CBC256_KEY_SIZE: usize = 32;
 const IV_SIZE: usize = 16;
 const BLOCK_SIZE: usize = 16;
 
-// extend data for data encryption
 struct Extend {
     // hmac
     mac: Box<dyn Mac>,
     ik_c_s: Vec<u8>,
     ik_s_c: Vec<u8>,
 }
+
 impl Extend {
     fn from(mac: Box<dyn Mac>, ik_c_s: Vec<u8>, ik_s_c: Vec<u8>) -> Self {
         Extend {
@@ -33,11 +33,11 @@ impl Extend {
     }
 }
 
-macro_rules! crate_aes_ctr {
+macro_rules! crate_aes_cbc {
     ($name: ident, $alg: ident, $key_size: expr) => {
         pub(super) struct $name {
-            pub(super) client_key: $alg,
-            pub(super) server_key: $alg,
+            pub(super) client_key: cbc::Encryptor<$alg>,
+            pub(super) server_key: cbc::Decryptor<$alg>,
             extend: Extend,
         }
 
@@ -65,8 +65,8 @@ macro_rules! crate_aes_ctr {
                 civ.clone_from_slice(&hash.iv_c_s[..IV_SIZE]);
                 siv.clone_from_slice(&hash.iv_s_c[..IV_SIZE]);
 
-                let c = $alg::new(&ckey.into(), &civ.into());
-                let r = $alg::new(&skey.into(), &siv.into());
+                let c = cbc::Encryptor::<$alg>::new(&ckey.into(), &civ.into());
+                let r = cbc::Decryptor::<$alg>::new(&skey.into(), &siv.into());
                 // hmac
                 let (ik_c_s, ik_s_c) = hash.mix_ik(mac.bsize());
                 $name {
@@ -77,11 +77,19 @@ macro_rules! crate_aes_ctr {
             }
 
             fn encrypt(&mut self, client_sequence_num: u32, buf: &mut Vec<u8>) {
+                let len = buf.len();
                 let tag = self
                     .extend
                     .mac
                     .sign(&self.extend.ik_c_s, client_sequence_num, buf);
-                self.client_key.apply_keystream(buf);
+                let mut idx = 0;
+                while idx < len {
+                    let mut block = GenericArray::clone_from_slice(&buf[idx..idx + BLOCK_SIZE]);
+                    self.client_key.encrypt_block_mut(&mut block);
+                    buf[idx..idx + BLOCK_SIZE].clone_from_slice(&block);
+
+                    idx += BLOCK_SIZE;
+                }
                 buf.extend(tag.as_ref())
             }
 
@@ -93,7 +101,17 @@ macro_rules! crate_aes_ctr {
                 let pl = self.packet_len(server_sequence_number, buf);
                 let data = &mut buf[..(pl + self.extend.mac.bsize())];
                 let (d, m) = data.split_at_mut(pl);
-                self.server_key.apply_keystream(d);
+
+                let len = d.len();
+                let mut idx = 0;
+                while idx < len {
+                    let mut block = GenericArray::clone_from_slice(&d[idx..idx + BLOCK_SIZE]);
+                    self.server_key.decrypt_block_mut(&mut block);
+                    d[idx..idx + BLOCK_SIZE].clone_from_slice(&block);
+
+                    idx += BLOCK_SIZE;
+                }
+
                 let tag = self
                     .extend
                     .mac
@@ -108,13 +126,9 @@ macro_rules! crate_aes_ctr {
             }
 
             fn packet_len(&mut self, _: u32, buf: &[u8]) -> usize {
-                let bsize = self.bsize();
-                let mut r = vec![0_u8; bsize];
-                r.clone_from_slice(&buf[..bsize]);
-                self.server_key.apply_keystream(&mut r);
-                let pos: usize = self.server_key.current_pos();
-                self.server_key.seek(pos - bsize);
-                let packet_len = u32::from_be_bytes(r[..4].try_into().unwrap());
+                let mut block = GenericArray::clone_from_slice(&buf[..BLOCK_SIZE]);
+                self.server_key.clone().decrypt_block_mut(&mut block);
+                let packet_len = u32::from_be_bytes(block[..4].try_into().unwrap());
                 (packet_len + 4) as usize
             }
 
@@ -131,9 +145,9 @@ macro_rules! crate_aes_ctr {
     };
 }
 
-// aes-128-ctr
-crate_aes_ctr!(Ctr128, Aes128Ctr64BE, CTR128_KEY_SIZE);
-// aes-192-ctr
-crate_aes_ctr!(Ctr192, Aes192Ctr64BE, CTR192_KEY_SIZE);
-// aes-256-ctr
-crate_aes_ctr!(Ctr256, Aes256Ctr64BE, CTR256_KEY_SIZE);
+// aes-128-cbc
+crate_aes_cbc!(Cbc128, Aes128, CBC128_KEY_SIZE);
+// aes-192-cbc
+crate_aes_cbc!(Cbc192, Aes192, CBC192_KEY_SIZE);
+// aes-256-cbc
+crate_aes_cbc!(Cbc256, Aes256, CBC256_KEY_SIZE);

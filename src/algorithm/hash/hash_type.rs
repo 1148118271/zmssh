@@ -1,4 +1,5 @@
-/// 密钥交换对应的hash算法
+/// The hash type used during kex
+/// this is determined by the kex alg
 #[derive(Copy, Clone)]
 pub enum HashType {
     None,

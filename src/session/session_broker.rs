@@ -8,18 +8,21 @@ use std::{
     thread::spawn,
 };
 
-use log::info;
+use tracing::*;
 
 use crate::{
     algorithm::Digest,
     channel::{BackendChannel, ExecBroker},
     client::Client,
     config::algorithm::AlgList,
-    constant::{size, ssh_msg_code, ssh_str},
+    constant::{size, ssh_channel_fail_code, ssh_connection_code, ssh_str, ssh_transport_code},
     error::{SshError, SshResult},
     model::{ArcMut, BackendResp, BackendRqst, Data, Packet, SecPacket, U32Iter},
-    ChannelBroker, ScpBroker, ShellBrocker, TerminalSize,
+    ChannelBroker, ShellBrocker, TerminalSize,
 };
+
+#[cfg(feature = "scp")]
+use crate::ScpBroker;
 
 pub struct SessionBroker {
     channel_num: ArcMut<U32Iter>,
@@ -34,7 +37,7 @@ impl SessionBroker {
         let (rqst_snd, rqst_rcv) = mpsc::channel();
         spawn(move || {
             if let Err(e) = client_loop(client, stream, rqst_rcv) {
-                log::error!("Error {} occurred when running backend task", e.to_string())
+                error!("Error {:?} occurred when running backend task", e)
             }
         });
         Self {
@@ -46,7 +49,7 @@ impl SessionBroker {
     /// close the backend session and consume the session broker itself
     ///
     pub fn close(self) {
-        log::info!("Client close");
+        info!("Client close");
         drop(self)
     }
 
@@ -59,6 +62,7 @@ impl SessionBroker {
 
     /// open a [ScpBroker] channel which can download/upload files/directories
     ///
+    #[cfg(feature = "scp")]
     pub fn open_scp(&mut self) -> SshResult<ScpBroker> {
         let channel = self.open_channel()?;
         channel.scp()
@@ -70,7 +74,7 @@ impl SessionBroker {
         self.open_shell_terminal(TerminalSize::from(80, 24))
     }
 
-    /// open a [LocalShell] channel
+    /// open a [ShellBrocker] channel
     ///
     /// custom terminal dimensions
     ///
@@ -89,7 +93,7 @@ impl SessionBroker {
 
         // open channel request
         let mut data = Data::new();
-        data.put_u8(ssh_msg_code::SSH_MSG_CHANNEL_OPEN)
+        data.put_u8(ssh_connection_code::CHANNEL_OPEN)
             .put_str(ssh_str::SESSION)
             .put_u32(client_id)
             .put_u32(size::LOCAL_WINDOW_SIZE)
@@ -107,7 +111,7 @@ impl SessionBroker {
                     resp_recv,
                     self.snd.clone(),
                 )),
-                BackendResp::Fail(msg) => Err(SshError::from(msg)),
+                BackendResp::Fail(msg) => Err(SshError::GeneralError(msg)),
                 _ => unreachable!(),
             },
             Err(e) => Err(e.into()),
@@ -121,7 +125,7 @@ where
 {
     let mut channels = HashMap::<u32, BackendChannel>::new();
     let mut pendings = HashMap::<u32, Sender<BackendResp>>::new();
-    client.set_timeout(0);
+    client.set_timeout(None);
     loop {
         let try_recv = rcv.try_recv();
         if try_recv.is_err() {
@@ -132,7 +136,7 @@ where
         } else if let Ok(rqst) = try_recv {
             match rqst {
                 BackendRqst::OpenChannel(id, data, sender) => {
-                    log::info!("try open channel {}.", id);
+                    info!("try open channel {}.", id);
 
                     data.pack(&mut client).write_stream(&mut stream)?;
 
@@ -142,17 +146,17 @@ where
                 BackendRqst::Data(id, data) => {
                     let channel = channels.get_mut(&id).unwrap();
 
-                    log::trace!("Channel {} send {} data", id, data.len());
+                    trace!("Channel {} send {} data", id, data.len());
                     channel.send_data(data, &mut client, &mut stream)?;
                 }
                 BackendRqst::Command(id, data) => {
                     let channel = channels.get_mut(&id).unwrap();
 
-                    log::trace!("Channel {} send control data", id);
+                    trace!("Channel {} send control data", id);
                     channel.send(data, &mut client, &mut stream)?;
                 }
                 BackendRqst::CloseChannel(id, data) => {
-                    log::info!("try close channel {}.", id);
+                    info!("try close channel {}.", id);
 
                     let channel = channels.get_mut(&id).unwrap();
                     channel.send(data, &mut client, &mut stream)?;
@@ -170,7 +174,7 @@ where
 
             match message_code {
                 // Successfully open a channel
-                ssh_msg_code::SSH_MSG_CHANNEL_OPEN_CONFIRMATION => {
+                ssh_connection_code::CHANNEL_OPEN_CONFIRMATION => {
                     let client_channel_no = data.get_u32();
                     let server_channel_no = data.get_u32();
                     let remote_window_size = data.get_u32();
@@ -195,14 +199,14 @@ where
                         .is_none())
                 }
                 /*
-                    byte SSH_MSG_CHANNEL_OPEN_FAILURE
+                    byte CHANNEL_OPEN_FAILURE
                     uint32 recipient channel
                     uint32 reason code
-                    string description，ISO-10646 UTF-8 编码[RFC3629]
+                    string description，ISO-10646 UTF-8 [RFC3629]
                     string language tag，[RFC3066]
                 */
                 // Fail to open a channel
-                ssh_msg_code::SSH_MSG_CHANNEL_OPEN_FAILURE => {
+                ssh_connection_code::CHANNEL_OPEN_FAILURE => {
                     //  client channel number
                     let id = data.get_u32();
 
@@ -217,37 +221,47 @@ where
                     data.get_u8s();
 
                     let err_msg = match code {
-                        ssh_msg_code::SSH_OPEN_ADMINISTRATIVELY_PROHIBITED => {
-                            format!("SSH_OPEN_ADMINISTRATIVELY_PROHIBITED: {}", description)
+                        ssh_channel_fail_code::ADMINISTRATIVELY_PROHIBITED => {
+                            format!("ADMINISTRATIVELY_PROHIBITED: {description}")
                         }
-                        ssh_msg_code::SSH_OPEN_CONNECT_FAILED => {
-                            format!("SSH_OPEN_CONNECT_FAILED: {}", description)
+                        ssh_channel_fail_code::CONNECT_FAILED => {
+                            format!("CONNECT_FAILED: {description}")
                         }
-                        ssh_msg_code::SSH_OPEN_UNKNOWN_CHANNEL_TYPE => {
-                            format!("SSH_OPEN_UNKNOWN_CHANNEL_TYPE: {}", description)
+                        ssh_channel_fail_code::UNKNOWN_CHANNEL_TYPE => {
+                            format!("UNKNOWN_CHANNEL_TYPE: {description}")
                         }
-                        ssh_msg_code::SSH_OPEN_RESOURCE_SHORTAGE => {
-                            format!("SSH_OPEN_RESOURCE_SHORTAGE: {}", description)
+                        ssh_channel_fail_code::RESOURCE_SHORTAGE => {
+                            format!("RESOURCE_SHORTAGE: {description}")
                         }
                         _ => description,
                     };
                     sender.unwrap().send(BackendResp::Fail(err_msg))?;
                 }
-                ssh_msg_code::SSH_MSG_KEXINIT => {
+                ssh_transport_code::KEXINIT => {
                     data.insert(0, message_code);
                     let mut digest = Digest::new();
                     digest.hash_ctx.set_i_s(&data);
                     let server_algs = AlgList::unpack((data, &mut client).into())?;
                     client.key_agreement(&mut stream, server_algs, &mut digest)?;
                 }
-                ssh_msg_code::SSH_MSG_CHANNEL_DATA => {
+                ssh_connection_code::CHANNEL_DATA => {
                     let id = data.get_u32();
-                    log::trace!("Channel {} get {} data", id, data.len());
+                    trace!("Channel {id} get {} data", data.len());
+                    let channel = channels.get_mut(&id).unwrap();
+                    channel.recv(data, &mut client, &mut stream)?;
+                }
+                ssh_connection_code::CHANNEL_EXTENDED_DATA => {
+                    let id = data.get_u32();
+                    let data_type = data.get_u32();
+                    trace!(
+                        "Channel {id} get {} extended data, type {data_type}",
+                        data.len(),
+                    );
                     let channel = channels.get_mut(&id).unwrap();
                     channel.recv(data, &mut client, &mut stream)?;
                 }
                 // flow_control msg
-                ssh_msg_code::SSH_MSG_CHANNEL_WINDOW_ADJUST => {
+                ssh_connection_code::CHANNEL_WINDOW_ADJUST => {
                     // client channel number
                     let id = data.get_u32();
                     // to_add
@@ -255,43 +269,43 @@ where
                     let channel = channels.get_mut(&id).unwrap();
                     channel.recv_window_adjust(rws, &mut client, &mut stream)?;
                 }
-                ssh_msg_code::SSH_MSG_CHANNEL_CLOSE => {
+                ssh_connection_code::CHANNEL_CLOSE => {
                     let id = data.get_u32();
-                    log::info!("Channel {} recv close", id);
+                    info!("Channel {} recv close", id);
                     let channel = channels.get_mut(&id).unwrap();
                     channel.remote_close()?;
                     if channel.is_close() {
                         channels.remove(&id);
                     }
                 }
-                ssh_msg_code::SSH_MSG_GLOBAL_REQUEST => {
+                ssh_connection_code::GLOBAL_REQUEST => {
                     let mut data = Data::new();
-                    data.put_u8(ssh_msg_code::SSH_MSG_REQUEST_FAILURE);
+                    data.put_u8(ssh_connection_code::REQUEST_FAILURE);
                     data.pack(&mut client).write_stream(&mut stream)?;
                     continue;
                 }
 
-                x @ ssh_msg_code::SSH_MSG_CHANNEL_EOF => {
-                    log::debug!("Currently ignore message {}", x);
+                x @ ssh_connection_code::CHANNEL_EOF => {
+                    debug!("Currently ignore message {}", x);
                 }
-                x @ ssh_msg_code::SSH_MSG_CHANNEL_REQUEST => {
-                    log::debug!("Currently ignore message {}", x);
+                x @ ssh_connection_code::CHANNEL_REQUEST => {
+                    debug!("Currently ignore message {}", x);
                 }
-                _x @ ssh_msg_code::SSH_MSG_CHANNEL_SUCCESS => {
+                _x @ ssh_connection_code::CHANNEL_SUCCESS => {
                     let id = data.get_u32();
-                    log::trace!("Channel {} control success", id);
+                    trace!("Channel {} control success", id);
                     let channel = channels.get_mut(&id).unwrap();
                     channel.success()?
                 }
-                ssh_msg_code::SSH_MSG_CHANNEL_FAILURE => {
+                ssh_connection_code::CHANNEL_FAILURE => {
                     let id = data.get_u32();
-                    log::trace!("Channel {} control failed", id);
+                    trace!("Channel {} control failed", id);
                     let channel = channels.get_mut(&id).unwrap();
                     channel.failed()?
                 }
 
                 x => {
-                    log::debug!("Currently ignore message {}", x);
+                    debug!("Currently ignore message {}", x);
                 }
             }
         }

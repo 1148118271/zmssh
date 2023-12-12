@@ -13,38 +13,35 @@ fn main() {
         return;
     }
 
-    println!(
-        "cargo:warning= current version: {} last version: {}",
-        current_version, last_version
-    );
+    println!("cargo:warning= current version: {current_version} last version: {last_version}");
 
-    // 替换lib.rs
+    // lib.rs
     if replace_lib(&current_version, &last_version).is_err() {
         return;
     }
-    // 替换constant.rs
+    // constant.rs
     if replace_constant(&current_version, &last_version).is_err() {
         return;
     }
-    // 替换Cargo.toml
+    // Cargo.toml
     let _ = replace_cargo(&current_version, &last_version);
 }
 
 fn replace_constant(current_version: &str, last_version: &str) -> Result<(), ()> {
-    let current_str = format!("SSH-2.0-SSH_RS-{}", current_version);
-    let last_str = format!("SSH-2.0-SSH_RS-{}", last_version);
+    let current_str = format!("SSH-2.0-SSH_RS-{current_version}");
+    let last_str = format!("SSH-2.0-SSH_RS-{last_version}");
     replace_file("src/constant.rs", current_str, last_str)
 }
 
 fn replace_lib(current_version: &str, last_version: &str) -> Result<(), ()> {
-    let current_str = format!("ssh-rs = \"{}\"", current_version);
-    let last_str = format!("ssh-rs = \"{}\"", last_version);
+    let current_str = format!("ssh-rs = \"{current_version}\"");
+    let last_str = format!("ssh-rs = \"{last_version}\"");
     replace_file("src/lib.rs", current_str, last_str)
 }
 
 fn replace_cargo(current_version: &str, last_version: &str) -> Result<(), ()> {
-    let current_str = format!("version = \"{}\"", current_version);
-    let last_str = format!("version = \"{}\"", last_version);
+    let current_str = format!("version = \"{current_version}\"");
+    let last_str = format!("version = \"{last_version}\"");
     replace_file("Cargo.toml", current_str, last_str)
 }
 

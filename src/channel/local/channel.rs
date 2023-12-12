@@ -1,17 +1,19 @@
 use std::io::{Read, Write};
 
-use crate::channel::local::ChannelSftp;
-use crate::model::TerminalSize;
 use crate::{
     algorithm::Digest,
     client::Client,
     config::algorithm::AlgList,
-    constant::ssh_msg_code,
+    constant::ssh_connection_code,
     error::{SshError, SshResult},
     model::{Data, FlowControl, Packet, RcMut, SecPacket},
 };
+use crate::{constant::ssh_transport_code, model::TerminalSize};
+use tracing::*;
 
-use super::{ChannelExec, ChannelScp, ChannelShell};
+#[cfg(feature = "scp")]
+use super::ChannelScp;
+use super::{ChannelExec, ChannelShell};
 
 pub(super) enum ChannelRead {
     Data(Vec<u8>),
@@ -56,14 +58,15 @@ where
     /// convert the raw channel to an [self::ChannelExec]
     ///
     pub fn exec(self) -> SshResult<ChannelExec<S>> {
-        log::info!("exec opened.");
+        info!("exec opened.");
         Ok(ChannelExec::open(self))
     }
 
     /// convert the raw channel to an [self::ChannelScp]
     ///
+    #[cfg(feature = "scp")]
     pub fn scp(self) -> SshResult<ChannelScp<S>> {
-        log::info!("scp opened.");
+        info!("scp opened.");
         Ok(ChannelScp::open(self))
     }
 
@@ -72,19 +75,14 @@ where
     /// with `row` lines & `column` characters per one line
     ///
     pub fn shell(self, tv: TerminalSize) -> SshResult<ChannelShell<S>> {
-        log::info!("shell opened.");
+        info!("shell opened.");
         ChannelShell::open(self, tv)
-    }
-
-    pub fn sftp(self) -> SshResult<ChannelSftp<S>> {
-        log::info!("sftp opened.");
-        ChannelSftp::open(self)
     }
 
     /// close the channel gracefully, but donnot consume it
     ///
     pub fn close(&mut self) -> SshResult<()> {
-        log::info!("channel close.");
+        info!("channel close.");
         self.send_close()?;
         self.receive_close()
     }
@@ -94,7 +92,7 @@ where
             return Ok(());
         }
         let mut data = Data::new();
-        data.put_u8(ssh_msg_code::SSH_MSG_CHANNEL_CLOSE)
+        data.put_u8(ssh_connection_code::CHANNEL_CLOSE)
             .put_u32(self.server_channel_no);
         self.local_close = true;
         self.send(data)
@@ -124,7 +122,7 @@ where
 
             // send it
             let mut data = Data::new();
-            data.put_u8(ssh_msg_code::SSH_MSG_CHANNEL_DATA)
+            data.put_u8(ssh_connection_code::CHANNEL_DATA)
                 .put_u32(self.server_channel_no)
                 .put_u8s(&buf);
             self.send(data)?;
@@ -147,10 +145,6 @@ where
         }
 
         Ok(maybe_response)
-    }
-
-    pub(crate) fn send_sftp_data(&mut self, ) {
-
     }
 
     /// this method will receive at least one data packet
@@ -203,7 +197,7 @@ where
     fn handle_msg(&mut self, mut data: Data) -> SshResult<ChannelRead> {
         let message_code = data.get_u8();
         match message_code {
-            x @ ssh_msg_code::SSH_MSG_KEXINIT => {
+            x @ ssh_transport_code::KEXINIT => {
                 data.insert(0, message_code);
                 let mut digest = Digest::new();
                 digest.hash_ctx.set_i_s(&data);
@@ -215,7 +209,7 @@ where
                 )?;
                 Ok(ChannelRead::Code(x))
             }
-            x @ ssh_msg_code::SSH_MSG_CHANNEL_DATA => {
+            x @ ssh_connection_code::CHANNEL_DATA => {
                 let cc = data.get_u32();
                 if cc == self.client_channel_no {
                     let mut data = data.get_u8s();
@@ -228,33 +222,51 @@ where
                 }
                 Ok(ChannelRead::Code(x))
             }
-            x @ ssh_msg_code::SSH_MSG_GLOBAL_REQUEST => {
+            x @ ssh_connection_code::CHANNEL_EXTENDED_DATA => {
+                let cc = data.get_u32();
+                if cc == self.client_channel_no {
+                    let data_type_code = data.get_u32();
+                    let mut data = data.get_u8s();
+
+                    debug!("Recv extended data with type {data_type_code}");
+
+                    // flow_contrl
+                    self.flow_control.tune_on_recv(&mut data);
+                    self.send_window_adjust(data.len() as u32)?;
+
+                    return Ok(ChannelRead::Data(data));
+                }
+                Ok(ChannelRead::Code(x))
+            }
+            x @ ssh_connection_code::GLOBAL_REQUEST => {
                 let mut data = Data::new();
-                data.put_u8(ssh_msg_code::SSH_MSG_REQUEST_FAILURE);
+                data.put_u8(ssh_connection_code::REQUEST_FAILURE);
                 self.send(data)?;
                 Ok(ChannelRead::Code(x))
             }
-            x @ ssh_msg_code::SSH_MSG_CHANNEL_WINDOW_ADJUST => {
+            x @ ssh_connection_code::CHANNEL_WINDOW_ADJUST => {
                 data.get_u32();
                 // to add
                 let rws = data.get_u32();
                 self.recv_window_adjust(rws)?;
                 Ok(ChannelRead::Code(x))
             }
-            x @ ssh_msg_code::SSH_MSG_CHANNEL_EOF => {
-                log::debug!("Currently ignore message {}", x);
+            x @ ssh_connection_code::CHANNEL_EOF => {
+                debug!("Currently ignore message {}", x);
                 Ok(ChannelRead::Code(x))
             }
-            x @ ssh_msg_code::SSH_MSG_CHANNEL_REQUEST => {
-                log::debug!("Currently ignore message {}", x);
+            x @ ssh_connection_code::CHANNEL_REQUEST => {
+                debug!("Currently ignore message {}", x);
                 Ok(ChannelRead::Code(x))
             }
-            x @ ssh_msg_code::SSH_MSG_CHANNEL_SUCCESS => {
-                log::debug!("Currently ignore message {}", x);
+            x @ ssh_connection_code::CHANNEL_SUCCESS => {
+                debug!("Currently ignore message {}", x);
                 Ok(ChannelRead::Code(x))
             }
-            ssh_msg_code::SSH_MSG_CHANNEL_FAILURE => Err(SshError::from("channel failure.")),
-            x @ ssh_msg_code::SSH_MSG_CHANNEL_CLOSE => {
+            ssh_connection_code::CHANNEL_FAILURE => {
+                Err(SshError::GeneralError("channel failure.".to_owned()))
+            }
+            x @ ssh_connection_code::CHANNEL_CLOSE => {
                 let cc = data.get_u32();
                 if cc == self.client_channel_no {
                     self.remote_close = true;
@@ -263,7 +275,7 @@ where
                 Ok(ChannelRead::Code(x))
             }
             x => {
-                log::debug!("Currently ignore message {}", x);
+                debug!("Currently ignore message {}", x);
                 Ok(ChannelRead::Code(x))
             }
         }
@@ -271,7 +283,7 @@ where
 
     fn send_window_adjust(&mut self, to_add: u32) -> SshResult<()> {
         let mut data = Data::new();
-        data.put_u8(ssh_msg_code::SSH_MSG_CHANNEL_WINDOW_ADJUST)
+        data.put_u8(ssh_connection_code::CHANNEL_WINDOW_ADJUST)
             .put_u32(self.server_channel_no)
             .put_u32(to_add);
         self.flow_control.on_send(to_add);

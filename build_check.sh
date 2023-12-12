@@ -5,6 +5,14 @@ cargo fmt --all -- --check > /dev/null
 echo done
 echo
 echo
+echo clippy check
+cargo clippy -- -D warnings > /dev/null
+echo
+echo
+echo clippy all check
+cargo clippy --all-features -- -D warnings > /dev/null
+echo
+echo
 echo linux build check
 cargo build --target x86_64-unknown-linux-gnu > /dev/null
 echo done
@@ -21,5 +29,5 @@ echo done
 echo
 echo
 echo cargo test
-cargo test > /dev/null
+cargo test --all-features -- --test-threads 1 > /dev/null
 echo done

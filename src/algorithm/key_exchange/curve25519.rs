@@ -13,14 +13,14 @@ impl KeyExchange for CURVE25519 {
         let rng = ring::rand::SystemRandom::new();
         let private_key = match EphemeralPrivateKey::generate(&X25519, &rng) {
             Ok(v) => v,
-            Err(_) => return Err(SshError::from("encryption error.")),
+            Err(e) => return Err(SshError::KexError(e.to_string())),
         };
         match private_key.compute_public_key() {
             Ok(public_key) => Ok(CURVE25519 {
                 private_key,
                 public_key,
             }),
-            Err(_) => Err(SshError::from("encryption error.")),
+            Err(e) => Err(SshError::KexError(e.to_string())),
         }
     }
 

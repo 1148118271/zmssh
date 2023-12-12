@@ -1,48 +1,40 @@
 use crate::model::Data;
 
-/// 密钥交换产生两个值：一个共享秘密 K，以及一个交换哈希 H。加密和验证密钥来自它们。第一
-/// 次密钥交换的交换哈希 H 也被用作会话标识，它是一个对该连接的唯一标识。它是验证方法中
-/// 被签名（以证明拥有私钥）的数据的一部分。会话标识被计算出来后，即使后来重新交换了密钥，
-/// 也不会改变。
+/// <https://www.rfc-editor.org/rfc/rfc4253#section-7.2>
 ///
+/// The key exchange produces two values: a shared secret K, and an
+/// exchange hash H.  Encryption and authentication keys are derived from
+/// these.  The exchange hash H from the first key exchange is
+/// additionally used as the session identifier, which is a unique
+/// identifier for this connection.  It is used by authentication methods
+/// as a part of the data that is signed as a proof of possession of a
+/// private key.  Once computed, the session identifier is not changed,
+/// even if keys are later re-exchanged.
 ///
-/// H = hash algorithm(v_c | v_s | i_c | i_s | k_s | q_c | q_s | k)
+/// H = hash(V_C || V_S || I_C || I_S || K_S || e || f || K)
 ///
 ///
 #[derive(Clone, Debug, Default)]
 pub struct HashCtx {
-    /// 一下数据如果有从数据包解析的数据
-    /// 统一不包含数据包里面的 PacketLength PaddingLength  PaddingString
-
-    /// 数据统一转为 [bytes]
-
-    /// 双方(客户端/服务端)的版本，
-    /// 数据长度 + 数据， 不包含 /r/n
-    /// 数据长度 [u32]
-    /// 数据    [str]
+    /// string    V_C, the client's identification string (CR and LF excluded)
     pub v_c: Vec<u8>,
+    /// string    V_S, the server's identification string (CR and LF excluded)
     pub v_s: Vec<u8>,
 
-    /// 双方(客户端/服务端)交换的算法，
-    /// 数据长度 + 数据
-    /// 数据长度 [u32]
-    /// 数据(客户端密钥交换信息数组) [`[str, str ...]`]
+    /// string    I_C, the payload of the client's SSH_MSG_KEXINIT
     pub i_c: Vec<u8>,
+    /// string    I_S, the payload of the server's SSH_MSG_KEXINIT
     pub i_s: Vec<u8>,
 
-    /// 主机密钥
-    /// 服务端发过来的host key 整体数据
+    /// string    K_S, the host key
     pub k_s: Vec<u8>,
 
-    /// 双方(客户端/服务端)的公钥，
-    /// 数据长度 + 数据
-    /// 数据长度 [u32]
-    /// 数据(客户端密钥交换信息数组) [bytes]
-    pub q_c: Vec<u8>,
-    pub q_s: Vec<u8>,
+    /// mpint     e, exchange value sent by the client
+    pub e: Vec<u8>,
+    /// mpint     f, exchange value sent by the server
+    pub f: Vec<u8>,
 
-    /// 共享密钥
-    /// 二进制补码 + 数据
+    /// mpint     K, the shared secret
     pub k: Vec<u8>,
 }
 
@@ -54,8 +46,8 @@ impl HashCtx {
             i_c: vec![],
             i_s: vec![],
             k_s: vec![],
-            q_c: vec![],
-            q_s: vec![],
+            e: vec![],
+            f: vec![],
             k: vec![],
         }
     }
@@ -85,15 +77,15 @@ impl HashCtx {
         data.put_u8s(ks);
         self.k_s = data.to_vec();
     }
-    pub fn set_q_c(&mut self, qc: &[u8]) {
+    pub fn set_e(&mut self, qc: &[u8]) {
         let mut data = Data::new();
         data.put_u8s(qc);
-        self.q_c = data.to_vec();
+        self.e = data.to_vec();
     }
-    pub fn set_q_s(&mut self, qs: &[u8]) {
+    pub fn set_f(&mut self, qs: &[u8]) {
         let mut data = Data::new();
         data.put_u8s(qs);
-        self.q_s = data.to_vec();
+        self.f = data.to_vec();
     }
     pub fn set_k(&mut self, k: &[u8]) {
         let mut data = Data::new();
@@ -108,8 +100,8 @@ impl HashCtx {
         v.extend(&self.i_c);
         v.extend(&self.i_s);
         v.extend(&self.k_s);
-        v.extend(&self.q_c);
-        v.extend(&self.q_s);
+        v.extend(&self.e);
+        v.extend(&self.f);
         v.extend(&self.k);
         v
     }

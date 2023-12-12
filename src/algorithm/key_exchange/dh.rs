@@ -5,7 +5,7 @@ use crate::SshResult;
 
 use super::{HashType, KeyExchange};
 
-#[cfg(feature = "dangerous-dh-group1-sha1")]
+#[cfg(feature = "deprecated-dh-group1-sha1")]
 const GROUP1: [u8; 128] = [
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xc9, 0xf, 0xda, 0xa2, 0x21, 0x68, 0xc2, 0x34,
     0xc4, 0xc6, 0x62, 0x8b, 0x80, 0xdc, 0x1c, 0xd1, 0x29, 0x2, 0x4e, 0x8, 0x8a, 0x67, 0xcc, 0x74,
@@ -42,7 +42,7 @@ struct DhGroup {
     exp_size: u64,
 }
 
-#[cfg(feature = "dangerous-dh-group1-sha1")]
+#[cfg(feature = "deprecated-dh-group1-sha1")]
 const DH_GROUP1: DhGroup = DhGroup {
     prime: &GROUP1,
     generator: 2,
@@ -108,7 +108,7 @@ macro_rules! create_dh_with_group {
     };
 }
 
-#[cfg(feature = "dangerous-dh-group1-sha1")]
+#[cfg(feature = "deprecated-dh-group1-sha1")]
 create_dh_with_group!(DiffieHellmanGroup1Sha1, DH_GROUP1, HashType::SHA1);
 create_dh_with_group!(DiffieHellmanGroup14Sha1, DH_GROUP14, HashType::SHA1);
 create_dh_with_group!(DiffieHellmanGroup14Sha256, DH_GROUP14, HashType::SHA256);

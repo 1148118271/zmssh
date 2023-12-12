@@ -83,8 +83,28 @@ jobs:
         run: apk add --no-cache --update sudo openssh bash openssh-keygen gcc musl-dev rust cargo
       - name: add user
         run: addgroup ubuntu && adduser --shell /bin/ash --disabled-password --home /home/ubuntu --ingroup ubuntu ubuntu && echo "ubuntu:password" | chpasswd
-      - name: config ssh
-        run: ssh-keygen -A && sed -i -E "s|(AuthorizedKeysFile).*|\1 %h/.ssh/authorized_keys|g" /etc/ssh/sshd_config && echo "HostKeyAlgorithms=+ssh-rsa" >> /etc/ssh/sshd_config && echo "PubkeyAcceptedAlgorithms=+ssh-rsa" >> /etc/ssh/sshd_config && echo "KexAlgorithms=+diffie-hellman-group14-sha1,diffie-hellman-group1-sha1" >> /etc/ssh/sshd_config && sed -i -E "s/#?(ChallengeResponseAuthentication|PasswordAuthentication).*/\1 yes/g" /etc/ssh/sshd_config
+      - name: config ssh keys
+        run: ssh-keygen -A 
+      - name: generate dsa keys
+        run: ssh-keygen -t dsa -b 1024 -N '' -f /etc/ssh/ssh_host_dsa_key
+      - name: add pubkey authentication
+        run: sed -i -E "s|(AuthorizedKeysFile).*|\1 %h/.ssh/authorized_keys|g" /etc/ssh/sshd_config
+      - name: enable password authentication
+        run: sed -i -E "s/#?(ChallengeResponseAuthentication|PasswordAuthentication).*/\1 yes/g" /etc/ssh/sshd_config
+      - name: add deprecated pubkeys
+        run: echo "HostKeyAlgorithms=+ssh-rsa,ssh-dss" >> /etc/ssh/sshd_config && echo "PubkeyAcceptedAlgorithms=+ssh-rsa,ssh-dss" >> /etc/ssh/sshd_config
+      - name: add deprecated kexes
+        run: echo "KexAlgorithms=+diffie-hellman-group14-sha1,diffie-hellman-group1-sha1" >> /etc/ssh/sshd_config
+      - name: add deprecated ciphers
+        run: echo "Ciphers=+aes128-cbc,3des-cbc,aes192-cbc,aes256-cbc" >> /etc/ssh/sshd_config
+      - name: add deprecated dsa keys
+        run: echo "HostKey /etc/ssh/ssh_host_dsa_key" >> /etc/ssh/sshd_config
+      - name: add rsa keys
+        run: echo "HostKey /etc/ssh/ssh_host_rsa_key" >> /etc/ssh/sshd_config
+      - name: add ed25519 keys
+        run: echo "HostKey /etc/ssh/ssh_host_ed25519_key" >> /etc/ssh/sshd_config
+      - name: add ecdsa keys
+        run: echo "HostKey /etc/ssh/ssh_host_ecdsa_key" >> /etc/ssh/sshd_config
       - name: create .ssh
         run: mkdir -p /home/ubuntu/.ssh && umask 066; touch /home/ubuntu/.ssh/authorized_keys
       - name: generate rsa files
@@ -98,6 +118,6 @@ jobs:
       - name: run ssh
         run: mkdir /run/sshd && /usr/sbin/sshd -T &&/usr/sbin/sshd -D -p 8888 &
       - name: Test
-        run: cargo test --all-features
+        run: cargo test --all-features -- --test-threads 1
       - name: Doc test
         run: cargo test --doc --all-features

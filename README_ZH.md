@@ -49,25 +49,39 @@ fn main() {
 ```
 
 ### 启用全局日志：
-
+本crate现在使用兼容`log`的`tracing` crate记录log
+使用下面的代码片段启用log
 ```rust
- ssh::debug();
+use tracing::Level;
+use tracing_subscriber::FmtSubscriber;
+// this will generate some basic event logs
+// a builder for `FmtSubscriber`.
+let subscriber = FmtSubscriber::builder()
+    // all spans/events with a level higher than INFO (e.g, info, warn, etc.)
+    // will be written to stdout.
+    .with_max_level(Level::INFO)
+    // completes the builder.
+    .finish();
+
+tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 ```
 
-### 设置超时时间：
+### 设置全局超时时间：
 
 ```rust
-ssh::create_session().timeout(50);
+ssh::create_session().timeout(Some(std::time::Duration::from_secs(5)));
 ```
 
-### 目前只支持 exec shell scp 三种使用方式： 
-1. [exec示例](examples/exec/src/main.rs) 
-2. [shell示例](examples/shell/src/main.rs) 
-3. [scp示例](examples/scp/src/main.rs)
+### 使用样例
+* 更多使用样例请参考[examples](examples)目录
 
+1. [执行单个命令](examples/exec/src/main.rs)
+2. [通过scp传输文件](examples/scp/src/main.rs)
+3. [启动一个pty](examples/shell/src/main.rs)
+4. [运行一个交互式的shell](examples/shell_interactive/src/main.rs)
+5. [使用非tcp连接](examples/bio/src/main.rs)
+6. [自行配置密码组](examples/customized_algorithms/src/main.rs)
 
-### 自定义连接方式:
-[bio示例](examples/bio/src/main.rs)
 
 ### 算法支持：
 
@@ -81,33 +95,30 @@ ssh::create_session().timeout(50);
 * `ssh-ed25519`
 * `rsa-sha2-512`
 * `rsa-sha2-256`
-* `rsa-sha` (features = ["dangerous-rsa-sha1"])
+* `rsa-sha` (features = ["deprecated-rsa-sha1"])
+* `ssh-dss` (features = ["deprecated-dss-sha1"])
 
-#### 3. 加密算法（客户端到服务端）
-
-* `chacha20-poly1305@openssh.com`
-* `aes128-ctr`
-
-#### 4. 加密算法（服务端到客户端）
+#### 3. 加密算法
 
 * `chacha20-poly1305@openssh.com`
 * `aes128-ctr`
+* `aes192-ctr`
+* `aes256-ctr`
+* `aes128-cbc` (features = ["deprecated-aes-cbc"])
+* `aes192-cbc` (features = ["deprecated-aes-cbc"])
+* `aes256-cbc` (features = ["deprecated-aes-cbc"])
+* `3des-cbc` (features = ["deprecated-des-cbc"])
 
-#### 5. MAC算法（客户端到服务端）
+#### 4. MAC算法
 
+* `hmac-sha2-256`
+* `hmac-sha2-512`
 * `hmac-sha1`
 
-#### 6. MAC算法（服务端到客户端）
-
-* `hmac-sha1`
-
-#### 7. 压缩算法（客户端到服务端）
+#### 5. 压缩算法
 
 * `none`
-
-#### 8. 压缩算法（服务端到客户端）
-
-* `none`
+* `zlib` (behind feature "zlib")
 
 ---
 
