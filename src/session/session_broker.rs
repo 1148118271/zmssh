@@ -161,7 +161,7 @@ where
                     let channel = channels.get_mut(&id).unwrap();
                     channel.send(data, &mut client, &mut stream)?;
                     channel.local_close()?;
-                    if channel.is_close() {
+                    if channel.closed() {
                         channels.remove(&id);
                     }
                 }
@@ -274,7 +274,7 @@ where
                     info!("Channel {} recv close", id);
                     let channel = channels.get_mut(&id).unwrap();
                     channel.remote_close()?;
-                    if channel.is_close() {
+                    if channel.closed() {
                         channels.remove(&id);
                     }
                 }
@@ -288,8 +288,10 @@ where
                 x @ ssh_connection_code::CHANNEL_EOF => {
                     debug!("Currently ignore message {}", x);
                 }
-                x @ ssh_connection_code::CHANNEL_REQUEST => {
-                    debug!("Currently ignore message {}", x);
+                ssh_connection_code::CHANNEL_REQUEST => {
+                    let id = data.get_u32();
+                    let channel = channels.get_mut(&id).unwrap();
+                    let _ = channel.recv_rqst(data);
                 }
                 _x @ ssh_connection_code::CHANNEL_SUCCESS => {
                     let id = data.get_u32();

@@ -31,6 +31,8 @@ where
     pub(crate) flow_control: FlowControl,
     pub(crate) client: RcMut<Client>,
     pub(crate) stream: RcMut<S>,
+    pub(crate) exit_status: u32,
+    pub(crate) terminate_msg: String,
 }
 
 impl<S> Channel<S>
@@ -52,6 +54,8 @@ where
             flow_control: FlowControl::new(remote_window),
             client,
             stream,
+            exit_status: 0,
+            terminate_msg: "".to_owned(),
         }
     }
 
@@ -79,12 +83,28 @@ where
         ChannelShell::open(self, tv)
     }
 
-    /// close the channel gracefully, but donnot consume it
+    /// close the channel gracefully, but do not consume it
     ///
     pub fn close(&mut self) -> SshResult<()> {
         info!("channel close.");
         self.send_close()?;
         self.receive_close()
+    }
+
+    /// <https://datatracker.ietf.org/doc/html/rfc4254#section-6.10>
+    ///
+    /// Return the command execute status
+    ///
+    pub fn exit_status(&self) -> SshResult<u32> {
+        Ok(self.exit_status)
+    }
+
+    /// <https://datatracker.ietf.org/doc/html/rfc4254#section-6.10>
+    ///
+    /// Return the terminate message if the command excution was 'killed' by a signal
+    ///
+    pub fn terminate_msg(&self) -> SshResult<String> {
+        Ok(self.terminate_msg.clone())
     }
 
     fn send_close(&mut self) -> SshResult<()> {
@@ -150,7 +170,7 @@ where
     /// this method will receive at least one data packet
     ///
     pub(super) fn recv(&mut self) -> SshResult<Vec<u8>> {
-        while !self.is_close() {
+        while !self.closed() {
             let maybe_recv = self.recv_once()?;
 
             if let ChannelRead::Data(data) = maybe_recv {
@@ -162,7 +182,7 @@ where
 
     pub(super) fn recv_to_end(&mut self) -> SshResult<Vec<u8>> {
         let mut resp = vec![];
-        while !self.is_close() {
+        while !self.closed() {
             let mut read_this_time = self.recv()?;
             resp.append(&mut read_this_time);
         }
@@ -256,7 +276,23 @@ where
                 Ok(ChannelRead::Code(x))
             }
             x @ ssh_connection_code::CHANNEL_REQUEST => {
-                debug!("Currently ignore message {}", x);
+                let cc = data.get_u32();
+                if cc == self.client_channel_no {
+                    let status: Vec<u8> = data.get_u8s();
+                    if let Ok(status_string) = String::from_utf8(status.clone()) {
+                        match status_string.as_str() {
+                            "exit-status" => {
+                                let _ = self.handle_exit_status(&mut data);
+                            }
+                            "exit-signal" => {
+                                let _ = self.handle_exit_signal(&mut data);
+                            }
+                            s => {
+                                debug!("Currently ignore request {}", s);
+                            }
+                        }
+                    }
+                }
                 Ok(ChannelRead::Code(x))
             }
             x @ ssh_connection_code::CHANNEL_SUCCESS => {
@@ -281,6 +317,33 @@ where
         }
     }
 
+    fn handle_exit_status(&mut self, data: &mut Data) -> SshResult<()> {
+        let maybe_false = data.get_u8();
+        if maybe_false == 0 {
+            self.exit_status = data.get_u32()
+        }
+        Ok(())
+    }
+
+    fn handle_exit_signal(&mut self, data: &mut Data) -> SshResult<()> {
+        let maybe_false = data.get_u8();
+        if maybe_false == 0 {
+            let sig_name = String::from_utf8(data.get_u8s())?;
+            self.terminate_msg += &format!("Current request is terminated by signal: {sig_name}\n");
+            let coredumped = data.get_u8();
+            self.terminate_msg += &format!("Coredumped: {}\n", {
+                if coredumped == 0 {
+                    "False"
+                } else {
+                    "True"
+                }
+            });
+            let err_msg = String::from_utf8(data.get_u8s())?;
+            self.terminate_msg += &format!("Error message:\n{err_msg}\n");
+        }
+        Ok(())
+    }
+
     fn send_window_adjust(&mut self, to_add: u32) -> SshResult<()> {
         let mut data = Data::new();
         data.put_u8(ssh_connection_code::CHANNEL_WINDOW_ADJUST)
@@ -295,7 +358,9 @@ where
         Ok(())
     }
 
-    pub(crate) fn is_close(&self) -> bool {
+    /// Return if the channel is closed
+    ///
+    pub fn closed(&self) -> bool {
         self.local_close && self.remote_close
     }
 }

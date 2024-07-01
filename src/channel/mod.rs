@@ -4,7 +4,7 @@ mod local;
 pub(crate) use backend::Channel as BackendChannel;
 pub use backend::{ChannelBroker, ExecBroker, ShellBrocker};
 
-pub(crate) use local::Channel as LocalChannel;
+pub use local::Channel as LocalChannel;
 pub use local::ChannelExec as LocalExec;
 pub use local::ChannelShell as LocalShell;
 

@@ -1,5 +1,5 @@
 /// The client version
-pub(crate) const CLIENT_VERSION: &str = "SSH-2.0-SSH_RS-0.4.5";
+pub(crate) const CLIENT_VERSION: &str = "SSH-2.0-SSH_RS-0.5.0";
 pub(crate) const SSH_MAGIC: &[u8] = b"SSH-";
 
 /// The constant strings that used for ssh communication

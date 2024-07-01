@@ -287,7 +287,7 @@ where
     }
 
     fn process_d(&mut self, scp_file: &mut ScpFile, local_path: &Path) -> SshResult<()> {
-        while !self.is_close() {
+        while !self.closed() {
             self.send_end()?;
             let data = self.recv()?;
             if data.is_empty() {
@@ -401,7 +401,7 @@ where
         };
         self.send_end()?;
         let mut count = 0;
-        while !self.is_close() {
+        while !self.closed() {
             let data = self.recv()?;
             if data.is_empty() {
                 continue;

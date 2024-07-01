@@ -1,24 +1,42 @@
 use super::channel::Channel;
-use crate::constant::{ssh_connection_code, ssh_str};
 use crate::error::SshResult;
 use crate::model::Data;
+use crate::{
+    constant::{ssh_connection_code, ssh_str},
+    SshError,
+};
 use std::{
     io::{Read, Write},
     ops::{Deref, DerefMut},
 };
 
-pub struct ChannelExec<S: Read + Write>(Channel<S>);
+pub struct ChannelExec<S: Read + Write> {
+    channel: Channel<S>,
+    command_send: bool,
+}
 
 impl<S> ChannelExec<S>
 where
     S: Read + Write,
 {
     pub(crate) fn open(channel: Channel<S>) -> Self {
-        ChannelExec(channel)
+        Self {
+            channel,
+            command_send: false,
+        }
     }
 
-    fn exec_command(&mut self, command: &str) -> SshResult<()> {
+    /// Send an executable command to the server
+    ///
+    pub fn exec_command(&mut self, command: &str) -> SshResult<()> {
+        if self.command_send {
+            return Err(SshError::GeneralError(
+                "An exec channle can only send one command".to_owned(),
+            ));
+        }
+
         tracing::debug!("Send command {}", command);
+        self.command_send = true;
         let mut data = Data::new();
         data.put_u8(ssh_connection_code::CHANNEL_REQUEST)
             .put_u32(self.server_channel_no)
@@ -26,6 +44,13 @@ where
             .put_u8(true as u8)
             .put_str(command);
         self.send(data)
+    }
+
+    /// Get the output of the previous command
+    ///
+    pub fn get_output(&mut self) -> SshResult<Vec<u8>> {
+        let r: Vec<u8> = self.recv_to_end()?;
+        Ok(r)
     }
 
     /// Send an executable command to the server
@@ -37,8 +62,7 @@ where
     pub fn send_command(mut self, command: &str) -> SshResult<Vec<u8>> {
         self.exec_command(command)?;
 
-        let r = self.recv_to_end()?;
-        Ok(r)
+        self.get_output()
     }
 }
 
@@ -48,7 +72,7 @@ where
 {
     type Target = Channel<S>;
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.channel
     }
 }
 
@@ -57,6 +81,6 @@ where
     S: Read + Write,
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+        &mut self.channel
     }
 }

@@ -85,7 +85,7 @@ impl Channel {
     where
         S: Read + Write,
     {
-        if !self.is_close() {
+        if !self.closed() {
             data.pack(client).write_stream(stream)
         } else {
             Err(SshError::GeneralError(
@@ -165,7 +165,56 @@ impl Channel {
         Ok(())
     }
 
-    pub fn is_close(&self) -> bool {
+    pub fn recv_rqst(&mut self, mut data: Data) -> SshResult<()> {
+        let status: Vec<u8> = data.get_u8s();
+        if let Ok(status_string) = String::from_utf8(status.clone()) {
+            match status_string.as_str() {
+                "exit-status" => {
+                    let _ = self.handle_exit_status(&mut data);
+                }
+                "exit-signal" => {
+                    let _ = self.handle_exit_signal(&mut data);
+                }
+                s => {
+                    debug!("Currently ignore request {}", s);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn handle_exit_status(&mut self, data: &mut Data) -> SshResult<()> {
+        let maybe_false = data.get_u8();
+        if maybe_false == 0 {
+            self.snd.send(BackendResp::ExitStatus(data.get_u32()))?
+        }
+        Ok(())
+    }
+
+    fn handle_exit_signal(&mut self, data: &mut Data) -> SshResult<()> {
+        let maybe_false = data.get_u8();
+        let mut msg = "".to_owned();
+        if maybe_false == 0 {
+            if let Ok(sig_name) = String::from_utf8(data.get_u8s()) {
+                msg += &format!("Current request is terminated by signal: {sig_name}\n");
+            }
+            let coredumped = data.get_u8();
+            msg += &format!("Coredumped: {}\n", {
+                if coredumped == 0 {
+                    "False"
+                } else {
+                    "True"
+                }
+            });
+            if let Ok(err_msg) = String::from_utf8(data.get_u8s()) {
+                msg += &format!("Error message:\n{err_msg}\n");
+            }
+        }
+        self.snd.send(BackendResp::TermMsg(msg))?;
+        Ok(())
+    }
+
+    pub fn closed(&self) -> bool {
         self.local_close && self.remote_close
     }
 }
@@ -182,6 +231,8 @@ pub struct ChannelBroker {
     pub(crate) rcv: Receiver<BackendResp>,
     pub(crate) snd: Sender<BackendRqst>,
     pub(crate) close: bool,
+    pub(crate) exit_status: u32,
+    pub(crate) terminate_msg: String,
 }
 
 impl ChannelBroker {
@@ -197,6 +248,8 @@ impl ChannelBroker {
             rcv,
             snd,
             close: false,
+            exit_status: 0,
+            terminate_msg: "".to_owned(),
         }
     }
 
@@ -219,13 +272,25 @@ impl ChannelBroker {
         ShellBrocker::open(self, tv)
     }
 
-    /// close the backend channel and consume the channel broker itself
+    /// <https://datatracker.ietf.org/doc/html/rfc4254#section-6.10>
     ///
-    pub fn close(mut self) -> SshResult<()> {
-        self.close_no_consue()
+    /// Return the command execute status
+    ///
+    pub fn exit_status(&self) -> SshResult<u32> {
+        Ok(self.exit_status)
     }
 
-    fn close_no_consue(&mut self) -> SshResult<()> {
+    /// <https://datatracker.ietf.org/doc/html/rfc4254#section-6.10>
+    ///
+    /// Return the terminate message if the command excution was 'killed' by a signal
+    ///
+    pub fn terminate_msg(&self) -> SshResult<String> {
+        Ok(self.terminate_msg.clone())
+    }
+
+    /// close the backend channel but do not consume
+    ///
+    pub fn close(&mut self) -> SshResult<()> {
         if !self.close {
             let mut data = Data::new();
             data.put_u8(ssh_connection_code::CHANNEL_CLOSE)
@@ -247,7 +312,7 @@ impl ChannelBroker {
         self.snd
             .send(BackendRqst::Command(self.client_channel_no, data))?;
         if !self.close {
-            match self.rcv.recv().unwrap() {
+            match self.rcv.recv()? {
                 BackendResp::Ok(_) => trace!("{}: control command ok", self.client_channel_no),
                 BackendResp::Fail(msg) => error!(
                     "{}: channel error with reason {}",
@@ -263,12 +328,20 @@ impl ChannelBroker {
         if self.close {
             Ok(vec![])
         } else {
-            match self.rcv.recv().unwrap() {
+            match self.rcv.recv()? {
                 BackendResp::Close => {
                     // the remote actively close their end
                     // but we can send close later when the broker get dropped
                     // just set a flag here
                     self.close = true;
+                    Ok(vec![])
+                }
+                BackendResp::ExitStatus(status) => {
+                    self.exit_status = status;
+                    Ok(vec![])
+                }
+                BackendResp::TermMsg(msg) => {
+                    self.terminate_msg = msg;
                     Ok(vec![])
                 }
                 BackendResp::Data(data) => Ok(data.into_inner()),
@@ -279,8 +352,8 @@ impl ChannelBroker {
 
     pub(super) fn try_recv(&mut self) -> SshResult<Option<Vec<u8>>> {
         if !self.close {
-            if let Ok(rqst) = self.rcv.try_recv() {
-                match rqst {
+            if let Ok(resp) = self.rcv.try_recv() {
+                match resp {
                     BackendResp::Close => {
                         // the remote actively close their end
                         // but we can send close later when the broker get dropped
@@ -289,6 +362,14 @@ impl ChannelBroker {
                         Ok(None)
                     }
                     BackendResp::Data(data) => Ok(Some(data.into_inner())),
+                    BackendResp::ExitStatus(status) => {
+                        self.exit_status = status;
+                        Ok(None)
+                    }
+                    BackendResp::TermMsg(msg) => {
+                        self.terminate_msg = msg;
+                        Ok(None)
+                    }
                     _ => unreachable!(),
                 }
             } else {
@@ -312,6 +393,6 @@ impl ChannelBroker {
 
 impl Drop for ChannelBroker {
     fn drop(&mut self) {
-        let _ = self.close_no_consue();
+        let _ = self.close();
     }
 }

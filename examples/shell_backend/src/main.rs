@@ -28,6 +28,9 @@ fn main() {
 
     // Close channel.
     shell.close().unwrap();
+    sleep(Duration::from_secs(2));
+    println!("exit status: {}", shell.exit_status().unwrap());
+    println!("terminated msg: {}", shell.terminate_msg().unwrap());
     // Close session.
     session.close();
 }

@@ -65,10 +65,6 @@ impl ShellBrocker {
         self.send_data(buf.to_vec().into())?;
         Ok(())
     }
-
-    pub fn close(self) -> SshResult<()> {
-        self.0.close()
-    }
 }
 
 impl Deref for ShellBrocker {

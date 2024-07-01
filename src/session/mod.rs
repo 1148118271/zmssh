@@ -142,6 +142,10 @@ impl SessionBuilder {
     }
 
     /// Read/Write timeout for local SSH mode. Use None to disable timeout.
+    /// This is a global timeout only take effect after the session is established
+    ///
+    /// Use `connect_with_timeout` instead if you want to add timeout
+    /// when connect to the target SSH server
     pub fn timeout(mut self, timeout: Option<Duration>) -> Self {
         self.config.timeout = timeout;
         self
@@ -241,12 +245,36 @@ impl SessionBuilder {
         self
     }
 
+    /// Create a TCP connection to the target server
+    ///
     pub fn connect<A>(self, addr: A) -> SshResult<SessionConnector<TcpStream>>
     where
         A: ToSocketAddrs,
     {
         // connect tcp by default
         let tcp = if let Some(ref to) = self.config.timeout {
+            TcpStream::connect_timeout(&addr.to_socket_addrs()?.next().unwrap(), *to)?
+        } else {
+            TcpStream::connect(addr)?
+        };
+
+        // default nonblocking
+        tcp.set_nonblocking(true).unwrap();
+        self.connect_bio(tcp)
+    }
+
+    /// Create a TCP connection to the target server, with timeout provided
+    ///
+    pub fn connect_with_timeout<A>(
+        self,
+        addr: A,
+        timeout: Option<Duration>,
+    ) -> SshResult<SessionConnector<TcpStream>>
+    where
+        A: ToSocketAddrs,
+    {
+        // connect tcp with custom connection timeout
+        let tcp = if let Some(ref to) = timeout {
             TcpStream::connect_timeout(&addr.to_socket_addrs()?.next().unwrap(), *to)?
         } else {
             TcpStream::connect(addr)?

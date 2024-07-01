@@ -27,6 +27,21 @@ impl Timeout {
             if self.wait_tick < NANOS_PER_SEC {
                 self.wait_tick <<= 1;
             }
+
+            if let Some(timemout) = self.timeout {
+                let timeout_nanos = timemout.as_nanos();
+                let used_nanos = self.instant.elapsed().as_nanos();
+
+                self.wait_tick = {
+                    if timeout_nanos > used_nanos
+                        && timeout_nanos - used_nanos < self.wait_tick as u128
+                    {
+                        (timeout_nanos - used_nanos) as u64
+                    } else {
+                        self.wait_tick
+                    }
+                };
+            }
         }
         self.wait_tick
     }
@@ -47,6 +62,6 @@ impl Timeout {
     }
 
     pub fn renew(&mut self) {
-        self.instant = Instant::now();
+        self.wait_tick = 1
     }
 }

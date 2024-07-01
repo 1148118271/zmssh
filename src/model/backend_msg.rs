@@ -13,5 +13,7 @@ pub(crate) enum BackendResp {
     Ok(u32),
     Fail(String),
     Data(Data),
+    ExitStatus(u32),
+    TermMsg(String),
     Close,
 }

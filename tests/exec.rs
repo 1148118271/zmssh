@@ -39,7 +39,7 @@ mod tests {
             .connect(get_server())
             .unwrap()
             .run_backend();
-        let exec = session.open_exec().unwrap();
+        let mut exec = session.open_exec().unwrap();
 
         const CMD: &str = "ls -lah";
 

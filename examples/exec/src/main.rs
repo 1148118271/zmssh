@@ -23,9 +23,15 @@ fn main() {
     let exec = session.open_exec().unwrap();
     let vec: Vec<u8> = exec.send_command("ls -all").unwrap();
     println!("{}", String::from_utf8(vec).unwrap());
+
+    let mut exec = session.open_exec().unwrap();
+    exec.exec_command("no_command").unwrap();
+    let vec = exec.get_output().unwrap();
+    println!("output: {}", String::from_utf8(vec).unwrap());
+    println!("exit status: {}", exec.exit_status().unwrap());
+    println!("terminated msg: {}", exec.terminate_msg().unwrap());
+    let _ = exec.close();
+
     // Close session.
-    let exec = session.open_exec().unwrap();
-    let vec: Vec<u8> = exec.send_command("no_command").unwrap();
-    println!("{}", String::from_utf8(vec).unwrap());
     session.close();
 }

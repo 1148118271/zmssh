@@ -71,6 +71,7 @@ where
                     }
                     return Ok(outbuf);
                 }
+                timeout.renew();
             }
             Err(e) => {
                 if let std::io::ErrorKind::WouldBlock = e.kind() {

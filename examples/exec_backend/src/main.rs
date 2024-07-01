@@ -20,9 +20,9 @@ fn main() {
         .connect("127.0.0.1:22")
         .unwrap()
         .run_backend();
-    let exec = session.open_exec().unwrap();
+    let mut exec = session.open_exec().unwrap();
 
-    const CMD: &str = "ls -lah";
+    const CMD: &str = "no command";
 
     // send the command to server
     println!("Send command {}", CMD);
@@ -33,7 +33,9 @@ fn main() {
 
     // get command result
     let vec: Vec<u8> = exec.get_result().unwrap();
-    println!("{}", String::from_utf8(vec).unwrap());
+    println!("output: {}", String::from_utf8(vec).unwrap());
+    println!("exit status: {}", exec.exit_status().unwrap());
+    println!("terminated msg: {}", exec.terminate_msg().unwrap());
 
     // Close session.
     session.close();
